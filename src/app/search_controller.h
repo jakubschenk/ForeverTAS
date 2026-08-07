@@ -14,6 +14,7 @@
 #include <QVariantMap>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 
@@ -60,6 +61,16 @@ class SearchController final : public QObject {
     Q_PROPERTY(bool cudaCalibrationEnabled READ cudaCalibrationEnabled WRITE
                        setCudaCalibrationEnabled NOTIFY
                        cudaCalibrationEnabledChanged)
+    Q_PROPERTY(QString cudaCalibrationStartSampleCount READ
+                       cudaCalibrationStartSampleCount WRITE
+                       setCudaCalibrationStartSampleCount NOTIFY
+                       cudaCalibrationStartSampleCountChanged)
+    Q_PROPERTY(QString cudaActiveCalibrationBatchSampleCount READ
+                       cudaActiveCalibrationBatchSampleCount NOTIFY
+                       cudaActiveCalibrationBatchSampleCountChanged)
+    Q_PROPERTY(QString cudaActiveBatchSampleCount READ
+                       cudaActiveBatchSampleCount NOTIFY
+                       cudaActiveBatchSampleCountChanged)
     Q_PROPERTY(bool cudaSessionSpecializationEnabled READ
                        cudaSessionSpecializationEnabled WRITE
                        setCudaSessionSpecializationEnabled NOTIFY
@@ -112,6 +123,14 @@ class SearchController final : public QObject {
                        metricsChanged)
     Q_PROPERTY(QString throughputText READ throughputText NOTIFY metricsChanged)
     Q_PROPERTY(QString elapsedText READ elapsedText NOTIFY metricsChanged)
+    Q_PROPERTY(QString evaluationCountText READ evaluationCountText NOTIFY
+                       metricsChanged)
+    Q_PROPERTY(QString mutationCountText READ mutationCountText NOTIFY
+                       metricsChanged)
+    Q_PROPERTY(QString improvementCountText READ improvementCountText NOTIFY
+                       metricsChanged)
+    Q_PROPERTY(QString targetProgressText READ targetProgressText NOTIFY
+                       metricsChanged)
     Q_PROPERTY(QString resultText READ resultText NOTIFY resultChanged)
     Q_PROPERTY(QString bestInputsText READ bestInputsText NOTIFY resultChanged)
 
@@ -137,6 +156,9 @@ public:
     QString cpuWorkerCount() const;
     QString cudaParallelSampleCount() const;
     bool cudaCalibrationEnabled() const;
+    QString cudaCalibrationStartSampleCount() const;
+    QString cudaActiveCalibrationBatchSampleCount() const;
+    QString cudaActiveBatchSampleCount() const;
     bool cudaSessionSpecializationEnabled() const;
     bool randomizeSeedsOnStart() const;
     bool drawTargetsThroughBlocks() const;
@@ -165,6 +187,10 @@ public:
     QString iterationCountText() const;
     QString throughputText() const;
     QString elapsedText() const;
+    QString evaluationCountText() const;
+    QString mutationCountText() const;
+    QString improvementCountText() const;
+    QString targetProgressText() const;
     QString resultText() const;
     QString bestInputsText() const;
 
@@ -178,6 +204,7 @@ public slots:
     void setCpuWorkerCount(const QString &value);
     void setCudaParallelSampleCount(const QString &value);
     void setCudaCalibrationEnabled(bool value);
+    void setCudaCalibrationStartSampleCount(const QString &value);
     void setCudaSessionSpecializationEnabled(bool value);
     void setRandomizeSeedsOnStart(bool value);
     void setDrawTargetsThroughBlocks(bool value);
@@ -223,6 +250,9 @@ signals:
     void cpuWorkerCountChanged();
     void cudaParallelSampleCountChanged();
     void cudaCalibrationEnabledChanged();
+    void cudaCalibrationStartSampleCountChanged();
+    void cudaActiveCalibrationBatchSampleCountChanged();
+    void cudaActiveBatchSampleCountChanged();
     void cudaSessionSpecializationEnabledChanged();
     void randomizeSeedsOnStartChanged();
     void drawTargetsThroughBlocksChanged();
@@ -265,7 +295,13 @@ private:
     void setLiveMetrics(const QString &iterationCountText,
                         const QString &throughputText,
                         const QString &elapsedText,
+                        const QString &evaluationCountText,
+                        const QString &mutationCountText,
+                        const QString &improvementCountText,
+                        const QString &targetProgressText,
                         bool visible);
+    void setCudaActiveCalibrationBatchSampleCount(const QString &value);
+    void setCudaActiveBatchSampleCount(const QString &value);
     void setResultText(const QString &value);
     void setBestInputsText(const QString &value);
     void setExtractingReplayInputs(bool value);
@@ -305,6 +341,10 @@ private:
     QString cudaParallelSampleCount_ = QString::number(
             kDefaultCudaParallelSampleCount);
     bool cudaCalibrationEnabled_ = false;
+    QString cudaCalibrationStartSampleCount_ = QString::number(
+            kDefaultCudaCalibrationStartSampleCount);
+    QString cudaActiveCalibrationBatchSampleCount_;
+    QString cudaActiveBatchSampleCount_;
     bool cudaSessionSpecializationEnabled_ = true;
     bool randomizeSeedsOnStart_ = true;
     bool drawTargetsThroughBlocks_ = false;
@@ -318,6 +358,10 @@ private:
     QString iterationCountText_;
     QString throughputText_;
     QString elapsedText_;
+    QString evaluationCountText_;
+    QString mutationCountText_;
+    QString improvementCountText_;
+    QString targetProgressText_;
     QString resultText_;
     QString bestInputsText_;
     bool valid_ = false;
@@ -331,6 +375,8 @@ private:
     QThread *inputExtractionThread_ = nullptr;
     QThread *workerThread_ = nullptr;
     QTimer *inputScriptPersistTimer_ = nullptr;
+    QTimer *searchElapsedUpdateTimer_ = nullptr;
+    std::optional<std::chrono::steady_clock::time_point> searchStarted_;
     bool extractingReplayInputs_ = false;
     std::shared_ptr<std::atomic_bool> stopRequested_;
     std::shared_ptr<std::atomic_bool> cancellationRequested_;

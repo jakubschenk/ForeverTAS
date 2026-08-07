@@ -76,6 +76,7 @@ function Test-CudaCache([string]$Directory) {
         "cuda=$env:CUDA_VERSION",
         "architectures=$env:CUDA_ARCHITECTURES",
         "split_compile_jobs=$SplitCompileJobs",
+        "empty_air_certificate=OFF",
         "cuda_host_compatibility=allow-unsupported-compiler",
         "validator=$env:FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT"
     )) {
@@ -90,11 +91,12 @@ function Test-CudaCache([string]$Directory) {
 }
 
 $CompilerIdentity = @(
-    "cache_schema=cuda-search-object-v1"
+    "cache_schema=cuda-search-object-v2"
     "cuda=$env:CUDA_VERSION"
     "architectures=$env:CUDA_ARCHITECTURES"
     "architecture_key=$env:CUDA_ARCHITECTURE_KEY"
     "split_compile_jobs=$SplitCompileJobs"
+    "empty_air_certificate=OFF"
     "cuda_host_compatibility=allow-unsupported-compiler"
     "validator=$env:FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT"
     (& clang-cl --version | Out-String)
@@ -120,6 +122,8 @@ New-Item -ItemType Directory -Force -Path $BuildDirectory, $DistDirectory | Out-
 & $env:SCCACHE_PATH --zero-stats
 try {
     $PrebuiltOption = "-DFOREVERVALIDATOR_CUDA_SEARCH_PREBUILT_OBJECT="
+    $PrebuiltFeatureOption =
+        "-DFOREVERVALIDATOR_CUDA_SEARCH_PREBUILT_EMPTY_AIR_CERTIFICATE=OFF"
     if ($CacheHit) {
         $PrebuiltOption = "-DFOREVERVALIDATOR_CUDA_SEARCH_PREBUILT_OBJECT=$CachedSearchObject"
     }
@@ -151,7 +155,9 @@ try {
         -DBUILD_TESTING=OFF `
         -DFOREVERTAS_ENABLE_CUDA=ON `
         "-DFOREVERVALIDATOR_CUDA_SPLIT_COMPILE_JOBS=$SplitCompileJobs" `
+        -DFOREVERVALIDATOR_CUDA_EMPTY_AIR_CERTIFICATE=OFF `
         $PrebuiltOption `
+        $PrebuiltFeatureOption `
         "-DFETCHCONTENT_SOURCE_DIR_FOREVERVALIDATOR=$ValidatorRoot"
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
@@ -189,6 +195,7 @@ try {
             "cuda=$env:CUDA_VERSION"
             "architectures=$env:CUDA_ARCHITECTURES"
             "split_compile_jobs=$SplitCompileJobs"
+            "empty_air_certificate=OFF"
             "cuda_host_compatibility=allow-unsupported-compiler"
             "validator=$env:FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT"
         ) | Set-Content -Path (Join-Path $TemporaryDirectory "metadata.txt")

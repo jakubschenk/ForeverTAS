@@ -7,6 +7,7 @@
 #include "mutations/input_event_formatter.h"
 #include "mutations/replay_input_script.h"
 #include "searches/algorithm_registry.h"
+#include "time_format.h"
 
 #include <QApplication>
 #include <QColor>
@@ -36,6 +37,8 @@ constexpr char kCudaParallelSampleCountKey[] =
         "backends/cuda/parallelSampleCount";
 constexpr char kCudaCalibrationEnabledKey[] =
         "backends/cuda/calibrationEnabled";
+constexpr char kCudaCalibrationStartSampleCountKey[] =
+        "backends/cuda/calibrationStartSampleCount";
 constexpr char kCudaSessionSpecializationEnabledKey[] =
         "backends/cuda/sessionSpecializationEnabled";
 constexpr char kRandomizeSeedsOnStartKey[] =
@@ -141,6 +144,12 @@ QString BackendId(PhysicsBackend backend) {
     return QString::fromLatin1(id.data(), static_cast<qsizetype>(id.size()));
 }
 
+QString SearchElapsedText(
+        std::chrono::steady_clock::time_point started) {
+    return QString::fromStdString(FormatHumanDuration(
+            std::chrono::steady_clock::now() - started));
+}
+
 }  // namespace
 
 SearchController::SearchController(QObject *parent)
@@ -200,9 +209,24 @@ void SearchController::initialize(const QStringList *packsSearchPatterns) {
     connect(inputScriptPersistTimer_, &QTimer::timeout, this, [this]() {
         persist(kBaseInputScriptKey, baseInputScript_);
     });
+    searchElapsedUpdateTimer_ = new QTimer(this);
+    searchElapsedUpdateTimer_->setInterval(250);
+    connect(searchElapsedUpdateTimer_, &QTimer::timeout, this, [this]() {
+        if (!running_ || simulationBackend_ != PhysicsBackend::Cuda ||
+            !searchStarted_ || !liveMetricsVisible_) {
+            return;
+        }
+        setLiveMetrics(iterationCountText_, throughputText_,
+                       SearchElapsedText(*searchStarted_),
+                       evaluationCountText_, mutationCountText_,
+                       improvementCountText_, targetProgressText_, true);
+    });
     cudaParallelSampleCount_ = StoredValue(
             kCudaParallelSampleCountKey,
             QString::number(kDefaultCudaParallelSampleCount));
+    cudaCalibrationStartSampleCount_ = StoredValue(
+            kCudaCalibrationStartSampleCountKey,
+            QString::number(kDefaultCudaCalibrationStartSampleCount));
     simulationHorizonMs_ = StoredValue(
             kSimulationHorizonKey,
             QString::number(kDefaultSimulationHorizonMs));
@@ -372,6 +396,18 @@ bool SearchController::cudaCalibrationEnabled() const {
     return cudaCalibrationEnabled_;
 }
 
+QString SearchController::cudaCalibrationStartSampleCount() const {
+    return cudaCalibrationStartSampleCount_;
+}
+
+QString SearchController::cudaActiveCalibrationBatchSampleCount() const {
+    return cudaActiveCalibrationBatchSampleCount_;
+}
+
+QString SearchController::cudaActiveBatchSampleCount() const {
+    return cudaActiveBatchSampleCount_;
+}
+
 bool SearchController::cudaSessionSpecializationEnabled() const {
     return cudaSessionSpecializationEnabled_;
 }
@@ -478,6 +514,22 @@ QString SearchController::throughputText() const {
 
 QString SearchController::elapsedText() const {
     return elapsedText_;
+}
+
+QString SearchController::evaluationCountText() const {
+    return evaluationCountText_;
+}
+
+QString SearchController::mutationCountText() const {
+    return mutationCountText_;
+}
+
+QString SearchController::improvementCountText() const {
+    return improvementCountText_;
+}
+
+QString SearchController::targetProgressText() const {
+    return targetProgressText_;
 }
 
 QString SearchController::resultText() const {
@@ -606,6 +658,17 @@ void SearchController::setCudaCalibrationEnabled(bool value) {
     QSettings().setValue(
             QLatin1String(kCudaCalibrationEnabledKey), value);
     emit cudaCalibrationEnabledChanged();
+    refreshValidation();
+}
+
+void SearchController::setCudaCalibrationStartSampleCount(
+        const QString &value) {
+    if (cudaCalibrationStartSampleCount_ == value) {
+        return;
+    }
+    cudaCalibrationStartSampleCount_ = value;
+    persist(kCudaCalibrationStartSampleCountKey, value);
+    emit cudaCalibrationStartSampleCountChanged();
     refreshValidation();
 }
 
@@ -1006,7 +1069,38 @@ void SearchController::startSearch() {
 
     setResultText({});
     setBestInputsText({});
-    setLiveMetrics({}, {}, {}, false);
+    const bool cudaSearch =
+            validation.request->backend == PhysicsBackend::Cuda;
+    const bool reportsCudaTargetDistance =
+            cudaSearch &&
+            validation.request->evaluationTarget.id ==
+                    kVolumeEntryEvaluationId;
+    setLiveMetrics(
+            cudaSearch ? QStringLiteral("0") : QString{},
+            {},
+            cudaSearch ? QStringLiteral("00:00:00") : QString{},
+            cudaSearch ? QStringLiteral("0") : QString{},
+            cudaSearch ? QStringLiteral("0") : QString{},
+            cudaSearch ? QStringLiteral("0") : QString{},
+            reportsCudaTargetDistance
+                    ? QStringLiteral("Waiting for the first target sample...")
+                    : QString{},
+            cudaSearch);
+    setCudaActiveBatchSampleCount(
+            cudaSearch
+                    ? QString::number(
+                              validation.request
+                                              ->calibrateCudaParallelSampleCount
+                                      ? validation.request
+                                                ->cudaCalibrationStartSampleCount
+                                      : validation.request
+                                                ->parallelSampleCount)
+                    : QString{});
+    setCudaActiveCalibrationBatchSampleCount({});
+    searchStarted_ = std::chrono::steady_clock::now();
+    if (cudaSearch) {
+        searchElapsedUpdateTimer_->start();
+    }
     lastCompletion_.reset();
     setProgress(true, 0.0);
     setStatusText(QStringLiteral("Starting search..."));
@@ -1047,18 +1141,58 @@ void SearchController::startSearch() {
             this,
             [this](const QString &iterationCountText,
                    const QString &throughputText,
-                   const QString &elapsedText) {
+                   const QString &elapsedText,
+                   const QString &evaluationCountText,
+                   const QString &mutationCountText,
+                   const QString &improvementCountText,
+                   const QString &targetProgressText) {
+                const QString displayedElapsed =
+                        simulationBackend_ == PhysicsBackend::Cuda &&
+                                searchStarted_
+                        ? SearchElapsedText(*searchStarted_)
+                        : elapsedText;
                 setLiveMetrics(iterationCountText,
                                throughputText,
-                               elapsedText,
+                               displayedElapsed,
+                               evaluationCountText,
+                               mutationCountText,
+                               improvementCountText,
+                               targetProgressText,
                                true);
             });
     connect(worker,
-            &SearchWorker::cudaBatchSizeChanged,
+            &SearchWorker::throughputReset,
             this,
-            [this](std::uint32_t batchSize) {
-                setCudaParallelSampleCount(
-                        QString::number(batchSize));
+            [this]() {
+                setLiveMetrics(iterationCountText_, {}, elapsedText_,
+                               evaluationCountText_, mutationCountText_,
+                               improvementCountText_, targetProgressText_,
+                               liveMetricsVisible_);
+            });
+    connect(worker,
+            &SearchWorker::cudaCalibrationActiveChanged,
+            this,
+            [this, thread](bool active) {
+                if (workerThread_ != thread || !running_) {
+                    return;
+                }
+                setCudaActiveCalibrationBatchSampleCount(
+                        active ? cudaActiveBatchSampleCount_ : QString{});
+            });
+    connect(worker,
+            &SearchWorker::cudaActiveBatchSizeChanged,
+            this,
+            [this, thread](std::uint32_t batchSize) {
+                if (workerThread_ != thread || !running_) {
+                    return;
+                }
+                const QString activeBatch = batchSize == 0u
+                        ? QString{}
+                        : QString::number(batchSize);
+                setCudaActiveBatchSampleCount(activeBatch);
+                if (!cudaActiveCalibrationBatchSampleCount_.isEmpty()) {
+                    setCudaActiveCalibrationBatchSampleCount(activeBatch);
+                }
             });
     connect(worker,
             &SearchWorker::bestChanged,
@@ -1100,12 +1234,24 @@ void SearchController::startSearch() {
     connect(worker, &SearchWorker::finished, worker, &QObject::deleteLater);
     connect(thread, &QThread::finished, this, [this, thread]() {
         if (workerThread_ == thread) {
+            if (simulationBackend_ == PhysicsBackend::Cuda &&
+                searchStarted_ && liveMetricsVisible_) {
+                setLiveMetrics(iterationCountText_, throughputText_,
+                               SearchElapsedText(*searchStarted_),
+                               evaluationCountText_, mutationCountText_,
+                               improvementCountText_, targetProgressText_,
+                               true);
+            }
+            searchElapsedUpdateTimer_->stop();
+            searchStarted_.reset();
             workerThread_ = nullptr;
             stopRequested_.reset();
             cancellationRequested_.reset();
             iterationPhase_.reset();
             setStopping(false);
             setRunning(false);
+            setCudaActiveBatchSampleCount({});
+            setCudaActiveCalibrationBatchSampleCount({});
         }
     });
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
@@ -1204,6 +1350,8 @@ SearchController::ValidationResult SearchController::validate() const {
 
     std::uint32_t parallelSampleCount = 1u;
     bool calibrateCudaParallelSampleCount = false;
+    std::uint32_t cudaCalibrationStartSampleCount =
+            kDefaultCudaCalibrationStartSampleCount;
     if (simulationBackend_ == PhysicsBackend::MultiThreadedCpu) {
         bool parsed = false;
         const QString trimmed = cpuWorkerCount_.trimmed();
@@ -1231,7 +1379,22 @@ SearchController::ValidationResult SearchController::validate() const {
         }
         calibrateCudaParallelSampleCount =
                 cudaCalibrationEnabled_;
-        if (!calibrateCudaParallelSampleCount) {
+        if (calibrateCudaParallelSampleCount) {
+            bool parsed = false;
+            const QString trimmed =
+                    cudaCalibrationStartSampleCount_.trimmed();
+            const uint value = trimmed.toUInt(&parsed);
+            if (!parsed ||
+                trimmed != cudaCalibrationStartSampleCount_ ||
+                value == 0u) {
+                return {
+                        {},
+                        QStringLiteral(
+                                "CUDA calibration starting samples must be "
+                                "a positive whole number.")};
+            }
+            cudaCalibrationStartSampleCount = value;
+        } else {
             bool parsed = false;
             const QString trimmed =
                     cudaParallelSampleCount_.trimmed();
@@ -1257,6 +1420,8 @@ SearchController::ValidationResult SearchController::validate() const {
     request.parallelSampleCount = parallelSampleCount;
     request.calibrateCudaParallelSampleCount =
             calibrateCudaParallelSampleCount;
+    request.cudaCalibrationStartSampleCount =
+            cudaCalibrationStartSampleCount;
     request.searchAlgorithm = configuration.searchAlgorithm;
     request.modifiers = configuration.modifiers;
     request.evaluationTarget = configuration.evaluationTarget;
@@ -1339,17 +1504,45 @@ void SearchController::setLiveMetrics(
         const QString &iterationCountText,
         const QString &throughputText,
         const QString &elapsedText,
+        const QString &evaluationCountText,
+        const QString &mutationCountText,
+        const QString &improvementCountText,
+        const QString &targetProgressText,
         bool visible) {
     if (iterationCountText_ == iterationCountText &&
         throughputText_ == throughputText && elapsedText_ == elapsedText &&
+        evaluationCountText_ == evaluationCountText &&
+        mutationCountText_ == mutationCountText &&
+        improvementCountText_ == improvementCountText &&
+        targetProgressText_ == targetProgressText &&
         liveMetricsVisible_ == visible) {
         return;
     }
     iterationCountText_ = iterationCountText;
     throughputText_ = throughputText;
     elapsedText_ = elapsedText;
+    evaluationCountText_ = evaluationCountText;
+    mutationCountText_ = mutationCountText;
+    improvementCountText_ = improvementCountText;
+    targetProgressText_ = targetProgressText;
     liveMetricsVisible_ = visible;
     emit metricsChanged();
+}
+
+void SearchController::setCudaActiveCalibrationBatchSampleCount(
+        const QString &value) {
+    if (cudaActiveCalibrationBatchSampleCount_ == value) {
+        return;
+    }
+    cudaActiveCalibrationBatchSampleCount_ = value;
+    emit cudaActiveCalibrationBatchSampleCountChanged();
+}
+
+void SearchController::setCudaActiveBatchSampleCount(
+        const QString &value) {
+    if (cudaActiveBatchSampleCount_ == value) return;
+    cudaActiveBatchSampleCount_ = value;
+    emit cudaActiveBatchSampleCountChanged();
 }
 
 void SearchController::setResultText(const QString &value) {

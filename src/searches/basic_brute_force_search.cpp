@@ -380,28 +380,35 @@ void ReportLive(
         std::uint64_t evaluatorCalls,
         std::uint64_t mutationImprovementCount,
         std::uint64_t totalMutationCount,
+        std::uint64_t qualifyingCandidateCount,
+        const std::optional<double> &closestTargetDistance,
         std::chrono::steady_clock::duration elapsed,
         const std::optional<std::chrono::steady_clock::duration>
                 &lastImprovementElapsed) {
-    if (control == nullptr || !control->liveChanged || !best.evaluation) {
+    if (control == nullptr || !control->liveChanged) {
         return;
     }
-    control->liveChanged({
-            best.source,
-            best.iterationIndex,
-            best.mutationCount,
-            best.evaluation->score,
-            best.evaluation->timeMs,
-            best.evaluation->description,
-            best.view,
-            best.inputs,
-            iterations,
-            evaluatorCalls,
-            mutationImprovementCount,
-            totalMutationCount,
-            elapsed,
-            lastImprovementElapsed,
-            {}});
+    SearchLiveUpdate live;
+    live.bestAvailable = best.evaluation.has_value();
+    if (best.evaluation) {
+        live.winnerSource = best.source;
+        live.winningIterationIndex = best.iterationIndex;
+        live.winningMutationCount = best.mutationCount;
+        live.bestScore = best.evaluation->score;
+        live.bestEvaluationTimeMs = best.evaluation->timeMs;
+        live.bestEvaluationDescription = best.evaluation->description;
+        live.bestState = best.view;
+        live.bestInputs = best.inputs;
+    }
+    live.iterations = iterations;
+    live.evaluatorCalls = evaluatorCalls;
+    live.mutationImprovementCount = mutationImprovementCount;
+    live.totalMutationCount = totalMutationCount;
+    live.elapsed = elapsed;
+    live.lastImprovementElapsed = lastImprovementElapsed;
+    live.qualifyingCandidateCount = qualifyingCandidateCount;
+    live.closestTargetDistance = closestTargetDistance;
+    control->liveChanged(live);
 }
 
 #if FOREVERVALIDATOR_HAS_CUDA
@@ -486,15 +493,16 @@ SearchResult RunCudaBasicBruteForce(
     if (context.cudaModifiers == nullptr ||
         context.cudaEvaluator == nullptr ||
         (!context.calibrateCudaBatchSize &&
-         context.cudaBatchSize == 0u)) {
+         context.cudaBatchSize == 0u) ||
+        (context.calibrateCudaBatchSize &&
+         context.cudaCalibrationStartBatchSize == 0u)) {
         throw std::invalid_argument(
                 "CUDA search configuration is unavailable");
     }
 
-    constexpr std::uint32_t calibrationInitialBatchSize = 1u;
     const std::uint32_t initialBatchSize =
             context.calibrateCudaBatchSize
-            ? calibrationInitialBatchSize
+            ? context.cudaCalibrationStartBatchSize
             : context.cudaBatchSize;
     PhysicsSandboxCudaSearchConfiguration configuration;
     configuration.maximumBatchSize = initialBatchSize;
@@ -521,7 +529,7 @@ SearchResult RunCudaBasicBruteForce(
     std::optional<CudaBatchCalibrator> calibrator;
     CudaCalibrationSafetyPlanner calibrationSafety;
     if (context.calibrateCudaBatchSize) {
-        calibrator.emplace();
+        calibrator.emplace(initialBatchSize);
     }
     std::uint32_t sessionCapacity = initialBatchSize;
     const std::uint64_t timelineTickCount =
@@ -536,6 +544,8 @@ SearchResult RunCudaBasicBruteForce(
     std::uint64_t evaluatorCalls = 0u;
     std::uint64_t mutationImprovementCount = 0u;
     std::uint64_t totalMutationCount = 0u;
+    std::uint64_t qualifyingCandidateCount = 0u;
+    std::optional<double> closestTargetDistance;
     std::optional<std::chrono::steady_clock::duration>
             lastImprovementElapsed;
     auto lastLiveReport = started - std::chrono::milliseconds(100);
@@ -551,10 +561,24 @@ SearchResult RunCudaBasicBruteForce(
                    evaluatorCalls,
                    mutationImprovementCount,
                    totalMutationCount,
+                   qualifyingCandidateCount,
+                   closestTargetDistance,
                    now - started,
                    lastImprovementElapsed);
         lastLiveReport = now;
     };
+    const auto accumulateTargetProgress =
+            [&](const PhysicsSandboxCudaSearchBatch &batch) {
+                qualifyingCandidateCount +=
+                        batch.qualifyingCandidateCount;
+                if (batch.closestTargetDistance &&
+                    (!closestTargetDistance ||
+                     *batch.closestTargetDistance <
+                             *closestTargetDistance)) {
+                    closestTargetDistance =
+                            batch.closestTargetDistance;
+                }
+            };
     const auto adoptBest =
             [&](PhysicsSandboxCudaSearchBatch &batch) {
                 if (!batch.bestValid ||
@@ -591,7 +615,11 @@ SearchResult RunCudaBasicBruteForce(
                     SearchExecutionContext::ResolvedCudaWinner resolved =
                             context.resolveCudaWinner(
                                     batch.bestInputs,
-                                    static_cast<std::uint32_t>(absoluteTick));
+                                    static_cast<std::uint32_t>(absoluteTick),
+                                    static_cast<std::uint32_t>(
+                                            (earliestMutationTimeMs -
+                                             context.tickDurationMs) /
+                                            context.tickDurationMs));
                     best.view = resolved.view;
                     best.snapshot = std::move(resolved.snapshot);
                     if (std::holds_alternative<
@@ -638,6 +666,7 @@ SearchResult RunCudaBasicBruteForce(
         throw SearchCancelled();
     }
     evaluatorCalls += baseline.evaluatorCalls;
+    accumulateTargetProgress(baseline);
     adoptBest(baseline);
     reportLive(true);
     if (calibrator) {
@@ -646,6 +675,7 @@ SearchResult RunCudaBasicBruteForce(
         ReportProgress(
                 context.control, SearchProgressStage::Calibration, 0u);
     } else {
+        ReportCudaBatchSize(context.control, initialBatchSize);
         ReportProgress(
                 context.control, SearchProgressStage::Mutations, 0u);
     }
@@ -782,6 +812,7 @@ SearchResult RunCudaBasicBruteForce(
         totalMutationCount += batch.totalMutationCount;
         mutationImprovementCount +=
                 batch.mutationImprovementCount;
+        accumulateTargetProgress(batch);
         const bool promote =
                 autoPromoteBest &&
                 batch.mutationImprovementCount != 0u &&
@@ -852,7 +883,7 @@ SearchResult RunCudaBasicBruteForce(
                     calibrator
                     ? (calibrator->Complete()
                                ? calibrator->BestBatchSize()
-                               : calibrationInitialBatchSize)
+                               : context.cudaCalibrationStartBatchSize)
                     : sessionCapacity;
             if (calibrator) {
                 const CudaCalibrationSafetyDecision decision =
@@ -937,7 +968,9 @@ SearchResult RunCudaBasicBruteForce(
             totalMutationCount,
             std::chrono::steady_clock::now() - started,
             lastImprovementElapsed,
-            *best.snapshot};
+            *best.snapshot,
+            qualifyingCandidateCount,
+            closestTargetDistance};
 }
 #endif
 
@@ -1083,6 +1116,8 @@ SearchResult BasicBruteForceSearch::Run(
                    evaluatorCalls,
                    mutationImprovementCount,
                    totalMutationCount,
+                   0u,
+                   std::nullopt,
                    now - started,
                    lastImprovementElapsed);
         lastLiveReport = now;
@@ -1295,7 +1330,9 @@ SearchResult BasicBruteForceSearch::Run(
             totalMutationCount,
             std::chrono::steady_clock::now() - started,
             lastImprovementElapsed,
-            *best.snapshot};
+            *best.snapshot,
+            0u,
+            std::nullopt};
 }
 
 }  // namespace forevertas

@@ -1207,6 +1207,22 @@ int main(int argc, char **argv) {
                     QObject *const stopSearchButton =
                             root->findChild<QObject *>(QStringLiteral(
                                     "stopSearchButton"));
+                    QObject *const frameRateMonitor =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "frameRateMonitor"));
+                    QObject *const frameRateSampleTimer =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "frameRateSampleTimer"));
+                    auto *const cudaBatchStatusPanel =
+                            qobject_cast<QQuickItem *>(
+                                    root->findChild<QObject *>(QStringLiteral(
+                                            "cudaBatchStatusPanel")));
+                    QObject *const cudaBatchStatusLabel =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "cudaBatchStatusLabel"));
+                    QObject *const cudaBatchBusyIndicator =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "cudaBatchBusyIndicator"));
                     auto *const searchMetricsRow = qobject_cast<QQuickItem *>(
                             root->findChild<QObject *>(QStringLiteral(
                                     "searchMetricsRow")));
@@ -1230,6 +1246,24 @@ int main(int argc, char **argv) {
                     QObject *const elapsedMetricValue =
                             root->findChild<QObject *>(QStringLiteral(
                                     "elapsedMetricValue"));
+                    auto *const searchActivityRow = qobject_cast<QQuickItem *>(
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "searchActivityRow")));
+                    QObject *const evaluationsMetricValue =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "evaluationsMetricValue"));
+                    QObject *const mutationsMetricValue =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "mutationsMetricValue"));
+                    QObject *const improvementsMetricValue =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "improvementsMetricValue"));
+                    auto *const targetProgressPanel = qobject_cast<QQuickItem *>(
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "targetProgressPanel")));
+                    QObject *const targetProgressLabel =
+                            root->findChild<QObject *>(QStringLiteral(
+                                    "targetProgressLabel"));
                     const bool keyboardStepping =
                             stepBackward != nullptr &&
                             stepForward != nullptr &&
@@ -2225,6 +2259,25 @@ int main(int argc, char **argv) {
                                     QStringLiteral("Stop") &&
                             !stopSearchButton->property("enabled").toBool();
                     const bool searchMetricsUiValid =
+                            frameRateMonitor != nullptr &&
+                            frameRateSampleTimer != nullptr &&
+                            frameRateMonitor->property("running").toBool() ==
+                                    (root->property("visible").toBool() &&
+                                     root->property("active").toBool() &&
+                                     viewer.loaded()) &&
+                            frameRateSampleTimer->property("running").toBool() ==
+                                    frameRateMonitor->property("running")
+                                            .toBool() &&
+                            cudaBatchStatusPanel != nullptr &&
+                            cudaBatchStatusLabel != nullptr &&
+                            cudaBatchBusyIndicator != nullptr &&
+                            !cudaBatchStatusPanel->isVisible() &&
+                            !cudaBatchBusyIndicator->property("running")
+                                     .toBool() &&
+                            cudaBatchStatusLabel->property("text")
+                                    .toString()
+                                    .contains(QStringLiteral(
+                                            "Preparing CUDA batch")) &&
                             searchMetricsRow != nullptr &&
                             iterationsMetricCard != nullptr &&
                             iterationsMetricValue != nullptr &&
@@ -2232,7 +2285,15 @@ int main(int argc, char **argv) {
                             throughputMetricValue != nullptr &&
                             elapsedMetricCard != nullptr &&
                             elapsedMetricValue != nullptr &&
+                            searchActivityRow != nullptr &&
+                            evaluationsMetricValue != nullptr &&
+                            mutationsMetricValue != nullptr &&
+                            improvementsMetricValue != nullptr &&
+                            targetProgressPanel != nullptr &&
+                            targetProgressLabel != nullptr &&
                             !searchMetricsRow->isVisible() &&
+                            !searchActivityRow->isVisible() &&
+                            !targetProgressPanel->isVisible() &&
                             std::abs(iterationsMetricCard->height() -
                                      throughputMetricCard->height()) < 0.1 &&
                             std::abs(throughputMetricCard->height() -
@@ -2242,6 +2303,14 @@ int main(int argc, char **argv) {
                             throughputMetricValue->property("text")
                                     .toString().isEmpty() &&
                             elapsedMetricValue->property("text")
+                                    .toString().isEmpty() &&
+                            evaluationsMetricValue->property("text")
+                                    .toString().isEmpty() &&
+                            mutationsMetricValue->property("text")
+                                    .toString().isEmpty() &&
+                            improvementsMetricValue->property("text")
+                                    .toString().isEmpty() &&
+                            targetProgressLabel->property("text")
                                     .toString().isEmpty();
                     const bool removedSectionDescriptions =
                             !ContainsText(
@@ -4443,6 +4512,7 @@ int main(int argc, char **argv) {
                                 << ")"
                                 << ", bestInputs=" << bestInputsUiValid
                                 << ", searchControls=" << searchControlsValid
+                                << ", searchMetrics=" << searchMetricsUiValid
                                 << ", autoPacks=" << automaticPacksUi
                                 << ", backend=" << backendSelectorValid
                                 << ", selectors=" << algorithmSelectorsValid

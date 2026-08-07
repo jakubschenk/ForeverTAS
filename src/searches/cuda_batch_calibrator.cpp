@@ -30,6 +30,11 @@ std::uint32_t FractionPoint(
 
 }  // namespace
 
+CudaBatchCalibrator::CudaBatchCalibrator(
+        std::uint32_t initialBatchSize) noexcept
+    : currentBatchSize_(std::max(initialBatchSize, 1u)),
+      bestBatchSize_(currentBatchSize_) {}
+
 std::uint32_t CudaBatchCalibrator::CurrentBatchSize() const noexcept {
     return currentBatchSize_;
 }
@@ -161,7 +166,12 @@ void CudaBatchCalibrator::FinishMeasurement(
 
 void CudaBatchCalibrator::BeginGrowth() {
     phase_ = Phase::Growth;
-    SetCurrent(2u);
+    if (currentBatchSize_ >
+        std::numeric_limits<std::uint32_t>::max() / 2u) {
+        BeginRefinement();
+        return;
+    }
+    SetCurrent(currentBatchSize_ * 2u);
 }
 
 void CudaBatchCalibrator::BeginRefinement() {

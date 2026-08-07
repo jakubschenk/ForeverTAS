@@ -1588,6 +1588,11 @@ bool TestRollingThroughput() {
     okay &= Check(
             throughput.Observe(100u, 15s) == 0.0,
             "idle throughput did not decay over the rolling window");
+
+    throughput.Reset(1'000u, 20s);
+    okay &= Check(
+            std::abs(throughput.Observe(1'300u, 22s) - 150.0) < 1e-9,
+            "throughput reset retained work from the previous CUDA batch");
     return okay;
 }
 
@@ -1622,6 +1627,16 @@ bool TestCudaBatchCalibrationStrategy() {
         return 9100.0 - distance * (950.0 / 5300.0);
     };
 
+    forevertas::CudaBatchCalibrator overriddenStart(65536u);
+    bool okay = Check(
+            overriddenStart.CurrentBatchSize() == 65536u &&
+                    overriddenStart.BestBatchSize() == 65536u,
+            "CUDA calibration ignored its overridden starting batch");
+    observe(&overriddenStart, 1000.0);
+    okay &= Check(
+            overriddenStart.CurrentBatchSize() == 131072u,
+            "CUDA calibration did not grow from its overridden start");
+
     const auto calibrate = [&observe](
                                    const auto &throughputForSize,
                                    std::uint32_t capacity) {
@@ -1647,7 +1662,7 @@ bool TestCudaBatchCalibrationStrategy() {
             102400u);
     const std::uint32_t calibratedSize =
             calibrator.BestBatchSize();
-    bool okay = Check(
+    okay &= Check(
             calibrator.Complete(),
             "CUDA calibration did not converge");
     okay &= Check(

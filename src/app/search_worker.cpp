@@ -5,8 +5,11 @@
 #include "mutations/input_event_formatter.h"
 #include "time_format.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
+#include <optional>
 #include <utility>
 
 namespace forevertas::app {
@@ -46,6 +49,17 @@ QString LastImprovementText(const SearchLiveUpdate &live) {
 }
 
 QString FormatLive(const SearchLiveUpdate &live, const QString &heading) {
+    if (!live.bestAvailable) {
+        return QStringLiteral(
+                       "%1: none yet\n"
+                       "No candidate has satisfied the selected target.\n"
+                       "Improvements: %2\n"
+                       "Last improvement: %3")
+                .arg(heading)
+                .arg(FormatCompactNumber(static_cast<double>(
+                        live.mutationImprovementCount)))
+                .arg(LastImprovementText(live));
+    }
     return QStringLiteral(
                    "%1: %2\n"
                    "%3\n"
@@ -60,23 +74,62 @@ QString FormatLive(const SearchLiveUpdate &live, const QString &heading) {
             .arg(LastImprovementText(live));
 }
 
+QString FormatTargetProgressText(const SearchLiveUpdate &live) {
+    const QString qualifying = FormatCompactNumber(
+            static_cast<double>(live.qualifyingCandidateCount));
+    const QString candidateLabel =
+            live.qualifyingCandidateCount == 1u
+            ? QStringLiteral("candidate")
+            : QStringLiteral("candidates");
+    if (live.closestTargetDistance) {
+        const double distance = *live.closestTargetDistance;
+        const QString distanceText = std::isfinite(distance)
+                ? QString::number(
+                          std::max(0.0, distance), 'f',
+                          distance < 100.0 ? 2 : 1)
+                : QStringLiteral("?");
+        if (live.qualifyingCandidateCount != 0u) {
+            return QStringLiteral(
+                           "Target triggered: %1 qualifying %2 \u2022 nearest "
+                           "sampled car center: %3 m")
+                    .arg(qualifying, candidateLabel, distanceText);
+        }
+        if (std::isfinite(distance) && distance <= 0.0) {
+            return QStringLiteral(
+                    "Cuboid reached geometrically (0.00 m away), but no "
+                    "qualifying entry trigger was recorded yet");
+        }
+        return QStringLiteral(
+                       "No qualifying entry trigger yet \u2022 nearest "
+                       "sampled car center: %1 m away")
+                .arg(distanceText);
+    }
+    return live.qualifyingCandidateCount == 0u
+            ? QStringLiteral("Waiting for the first target sample...")
+            : QStringLiteral("Target triggered: %1 qualifying %2")
+                      .arg(qualifying, candidateLabel);
+}
+
 SearchLiveUpdate ToLiveUpdate(const SearchResult &result) {
-    return {
-            result.winnerSource,
-            result.winningIterationIndex,
-            result.winningMutationCount,
-            result.bestScore,
-            result.bestEvaluationTimeMs,
-            result.bestEvaluationDescription,
-            result.bestState,
-            result.bestInputs,
-            result.iterations,
-            result.evaluatorCalls,
-            result.mutationImprovementCount,
-            result.totalMutationCount,
-            result.elapsed,
-            result.lastImprovementElapsed,
-            {}};
+    SearchLiveUpdate live;
+    live.winnerSource = result.winnerSource;
+    live.winningIterationIndex = result.winningIterationIndex;
+    live.winningMutationCount = result.winningMutationCount;
+    live.bestScore = result.bestScore;
+    live.bestEvaluationTimeMs = result.bestEvaluationTimeMs;
+    live.bestEvaluationDescription = result.bestEvaluationDescription;
+    live.bestState = result.bestState;
+    live.bestInputs = result.bestInputs;
+    live.iterations = result.iterations;
+    live.evaluatorCalls = result.evaluatorCalls;
+    live.mutationImprovementCount = result.mutationImprovementCount;
+    live.totalMutationCount = result.totalMutationCount;
+    live.elapsed = result.elapsed;
+    live.lastImprovementElapsed = result.lastImprovementElapsed;
+    live.bestAvailable = true;
+    live.qualifyingCandidateCount = result.qualifyingCandidateCount;
+    live.closestTargetDistance = result.closestTargetDistance;
+    return live;
 }
 
 QString FormatResult(const SearchResult &result) {
@@ -89,6 +142,10 @@ QString FilePathFromUtf8(const std::string &path) {
 }
 
 }  // namespace
+
+QString SearchTargetProgressText(const SearchLiveUpdate &live) {
+    return FormatTargetProgressText(live);
+}
 
 QString SearchStageStatus(SearchProgressStage stage,
                           std::string_view backendId,
@@ -205,6 +262,20 @@ void SearchWorker::run() {
     emit stageChanged(QStringLiteral("Preparing search..."), true);
 
     SearchRunControl control;
+    struct LiveMetricWindow final {
+        RollingThroughput throughput;
+        std::uint64_t iterations = 0u;
+        std::chrono::steady_clock::duration elapsed{};
+        std::optional<SearchProgressStage> stage;
+        std::optional<std::uint32_t> cudaBatchSize;
+        std::optional<bool> cudaCalibrationActive;
+
+        void ResetThroughput() {
+            throughput.Reset(iterations, elapsed);
+        }
+    };
+    const auto liveMetricWindow =
+            std::make_shared<LiveMetricWindow>();
     control.reuseLoadedSandbox = true;
     control.stopRequested = [flag = stopRequested_]() {
         return flag->load(std::memory_order_relaxed);
@@ -215,18 +286,38 @@ void SearchWorker::run() {
     control.beginIteration = [phase = iterationPhase_]() {
         return TryBeginSearchIteration(phase);
     };
-    control.progressChanged = [this](const SearchProgress &progress) {
+    control.progressChanged =
+            [this, liveMetricWindow](const SearchProgress &progress) {
+        if (PhysicsBackendId(request_.backend) == "cuda" &&
+            liveMetricWindow->stage != progress.stage) {
+            liveMetricWindow->stage = progress.stage;
+            liveMetricWindow->ResetThroughput();
+            emit throughputReset();
+        }
+        if (PhysicsBackendId(request_.backend) == "cuda") {
+            const bool calibrationActive =
+                    progress.stage == SearchProgressStage::Calibration;
+            if (liveMetricWindow->cudaCalibrationActive !=
+                calibrationActive) {
+                liveMetricWindow->cudaCalibrationActive =
+                        calibrationActive;
+                emit cudaCalibrationActiveChanged(calibrationActive);
+            }
+        }
+        if (PhysicsBackendId(request_.backend) == "cuda" &&
+            (progress.stage == SearchProgressStage::FinalSamplingSetup ||
+             progress.stage == SearchProgressStage::FinalSampling) &&
+            liveMetricWindow->cudaBatchSize.value_or(0u) != 0u) {
+            liveMetricWindow->cudaBatchSize = 0u;
+            emit cudaActiveBatchSizeChanged(0u);
+        }
         if (progress.stage == SearchProgressStage::FinalSampling) {
             const double value = progress.totalWork == 0u
                     ? 1.0
                     : static_cast<double>(progress.completedWork) /
                               static_cast<double>(progress.totalWork);
-            const bool cuda =
-                    PhysicsBackendId(request_.backend) == "cuda";
-            const QString status = cuda
-                    ? QStringLiteral(
-                              "Sampling best run on CUDA: %1 of %2 ticks")
-                    : QStringLiteral("Sampling best run: %1 of %2 ticks");
+            const QString status = QStringLiteral(
+                    "Sampling best run with reference physics: %1 of %2 ticks");
             emit progressChanged(
                     value,
                     status
@@ -243,8 +334,13 @@ void SearchWorker::run() {
                         request_.useCudaSessionSpecialization),
                 true);
     };
-    control.cudaBatchSizeChanged = [this](std::uint32_t batchSize) {
-        emit cudaBatchSizeChanged(batchSize);
+    control.cudaBatchSizeChanged =
+            [this, liveMetricWindow](std::uint32_t batchSize) {
+        if (liveMetricWindow->cudaBatchSize != batchSize) {
+            liveMetricWindow->cudaBatchSize = batchSize;
+            liveMetricWindow->ResetThroughput();
+        }
+        emit cudaActiveBatchSizeChanged(batchSize);
     };
     const auto publishedTrajectoryNumber =
             std::make_shared<std::atomic_uint64_t>(0u);
@@ -252,7 +348,7 @@ void SearchWorker::run() {
             [this, publishedTrajectoryNumber](
                     const SearchLiveUpdate &live,
                     std::string_view backendId) {
-                if (live.bestTimeline.empty()) {
+                if (!live.bestAvailable || live.bestTimeline.empty()) {
                     return;
                 }
                 auto improvement = std::make_shared<SearchImprovement>();
@@ -277,21 +373,36 @@ void SearchWorker::run() {
                            latestIteration =
                                    std::optional<std::uint64_t>{},
                            publishImprovement,
-                           throughput = RollingThroughput()](
+                           liveMetricWindow](
                                   const SearchLiveUpdate &live) mutable {
-        if (latestInputsText.isEmpty() ||
-            latestSource != live.winnerSource ||
-            latestIteration != live.winningIterationIndex) {
+        if (live.bestAvailable &&
+            (latestInputsText.isEmpty() ||
+             latestSource != live.winnerSource ||
+             latestIteration != live.winningIterationIndex)) {
             latestInputsText = QString::fromStdString(
                     FormatInputScript(live.bestInputs));
             latestSource = live.winnerSource;
             latestIteration = live.winningIterationIndex;
         }
+        const double throughput = liveMetricWindow->throughput.Observe(
+                live.iterations, live.elapsed);
+        liveMetricWindow->iterations = live.iterations;
+        liveMetricWindow->elapsed = live.elapsed;
         emit metricsChanged(
                 FormatCompactNumber(static_cast<double>(live.iterations)),
-                IterationsPerSecond(
-                        throughput.Observe(live.iterations, live.elapsed)),
-                RoundedDuration(live.elapsed));
+                IterationsPerSecond(throughput),
+                RoundedDuration(live.elapsed),
+                FormatCompactNumber(
+                        static_cast<double>(live.evaluatorCalls)),
+                FormatCompactNumber(
+                        static_cast<double>(live.totalMutationCount)),
+                FormatCompactNumber(static_cast<double>(
+                        live.mutationImprovementCount)),
+                PhysicsBackendId(request_.backend) == "cuda" &&
+                        request_.evaluationTarget.id ==
+                                kVolumeEntryEvaluationId
+                        ? SearchTargetProgressText(live)
+                        : QString{});
         publishImprovement(live, PhysicsBackendId(request_.backend));
         emit bestChanged(
                 FormatLive(live, QStringLiteral("Current best")),
