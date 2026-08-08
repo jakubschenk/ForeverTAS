@@ -10,6 +10,7 @@ const int MAX_CAR_ELLIPSOIDS = 16;
 struct Vertex {
     vec4 position;
     vec4 normal;
+    vec4 tangent;
     vec4 uv;
     vec4 color;
 };
@@ -25,7 +26,9 @@ struct BvhNode {
 };
 
 struct Material {
-    vec4 parameters;
+    vec4 surface;
+    vec4 optical;
+    vec4 transmission;
 };
 
 layout(std140, binding = 0) uniform CameraData {
@@ -55,8 +58,10 @@ layout(std430, binding = 4) readonly buffer Materials {
     Material materials[];
 };
 layout(binding = 5) uniform sampler2DArray materialTextures;
-layout(binding = 6) uniform sampler2D environmentTexture;
-layout(rgba32f, binding = 7) uniform image2D outputImage;
+layout(binding = 6) uniform sampler2DArray materialNormalTextures;
+layout(binding = 7) uniform sampler2DArray materialRoughnessTextures;
+layout(binding = 8) uniform sampler2D environmentTexture;
+layout(rgba16f, binding = 9) uniform image2D outputImage;
 
 struct Hit {
     float distance;
@@ -122,7 +127,9 @@ bool intersectTriangle(vec3 origin,
 bool intersectEllipsoid(vec3 origin,
                         vec3 direction,
                         int ellipsoidIndex,
-                        inout Hit hit) {
+                        float maximumDistance,
+                        out float hitDistance) {
+    hitDistance = maximumDistance;
     vec3 center = camera.ellipsoidCenter[ellipsoidIndex].xyz;
     vec3 radii = max(camera.ellipsoidRadii[ellipsoidIndex].xyz,
                      vec3(0.001));
@@ -140,9 +147,8 @@ bool intersectEllipsoid(vec3 origin,
     float root = sqrt(discriminant);
     float distance = (-b - root) / a;
     if (distance <= RAY_EPSILON) distance = (-b + root) / a;
-    if (distance <= RAY_EPSILON || distance >= hit.distance) return false;
-    hit.distance = distance;
-    hit.ellipsoidIndex = ellipsoidIndex;
+    if (distance <= RAY_EPSILON || distance >= maximumDistance) return false;
+    hitDistance = distance;
     return true;
 }
 
@@ -199,7 +205,14 @@ Hit traceScene(vec3 origin, vec3 direction, float maximumDistance) {
 
     int ellipsoidCount = int(camera.renderInfo.z + 0.5);
     for (int index = 0; index < ellipsoidCount; ++index) {
-        intersectEllipsoid(origin, direction, index, hit);
+        float ellipsoidDistance;
+        if (intersectEllipsoid(origin, direction, index, hit.distance,
+                               ellipsoidDistance)) {
+            hit.distance = ellipsoidDistance;
+            hit.triangleIndex = 0u;
+            hit.barycentric = vec2(0.0);
+            hit.ellipsoidIndex = index;
+        }
     }
     return hit;
 }
@@ -241,31 +254,33 @@ bool sceneOccluded(vec3 origin,
     }
 
     int ellipsoidCount = int(camera.renderInfo.z + 0.5);
-    Hit candidate;
-    candidate.distance = maximumDistance;
-    candidate.ellipsoidIndex = -1;
     for (int index = 0; index < ellipsoidCount; ++index) {
+        float ellipsoidDistance;
         if (intersectEllipsoid(
-                    origin, direction, index, candidate)) {
+                    origin, direction, index, maximumDistance,
+                    ellipsoidDistance)) {
             return true;
         }
     }
     return false;
 }
 
-vec3 environmentColor(vec3 direction) {
+vec3 environmentColor(vec3 direction, float lodValue) {
     float longitude = atan(direction.z, direction.x);
     float latitude = acos(clamp(direction.y, -1.0, 1.0));
     vec2 uv = vec2(longitude / (2.0 * PI) + 0.5,
                    latitude / PI);
-    return textureLod(environmentTexture, uv, 0.0).rgb;
+    return textureLod(environmentTexture, uv, clamp(lodValue, 0.0, 10.0)).rgb;
 }
 
 void triangleSurface(Hit hit,
                      vec3 incomingDirection,
                      out vec3 normal,
+                     out vec3 tangent,
                      out vec3 baseColor,
-                     out vec4 parameters,
+                     out vec4 surface,
+                     out vec4 optical,
+                     out vec4 transmission,
                      out uint materialIndex) {
     Triangle triangle = triangles[hit.triangleIndex];
     Vertex a = vertices[triangle.data.x];
@@ -276,6 +291,10 @@ void triangleSurface(Hit hit,
                        b.normal.xyz * hit.barycentric.x +
                        c.normal.xyz * hit.barycentric.y);
     if (dot(normal, incomingDirection) > 0.0) normal = -normal;
+    tangent = normalize(a.tangent.xyz * w +
+                        b.tangent.xyz * hit.barycentric.x +
+                        c.tangent.xyz * hit.barycentric.y);
+    tangent = normalize(tangent - normal * dot(normal, tangent));
     vec2 uv = a.uv.xy * w + b.uv.xy * hit.barycentric.x +
               c.uv.xy * hit.barycentric.y;
     vec4 vertexColor = a.color * w +
@@ -289,18 +308,44 @@ void triangleSurface(Hit hit,
             materialTextures,
             vec3(fract(uv), float(materialIndex)),
             textureLodValue).rgb;
-    parameters = materials[materialIndex].parameters;
-    bool usesVertexColor = parameters.w > 0.5;
+    Material material = materials[materialIndex];
+    surface = material.surface;
+    optical = material.optical;
+    transmission = material.transmission;
+    bool usesVertexColor = surface.w > 0.5;
     baseColor = textureColor *
                 (usesVertexColor ? vertexColor.rgb : vec3(1.0));
+
+    if (transmission.w > 0.5) {
+        surface.x = clamp(surface.x * textureLod(
+                materialRoughnessTextures,
+                vec3(fract(uv), float(materialIndex)),
+                textureLodValue).r, 0.04, 1.0);
+    }
+    if (transmission.z > 0.5 && optical.x > 0.0) {
+        vec3 tangentNormal = textureLod(
+                materialNormalTextures,
+                vec3(fract(uv), float(materialIndex)),
+                textureLodValue).xyz * 2.0 - 1.0;
+        tangentNormal.xy *= optical.x;
+        tangentNormal = normalize(tangentNormal);
+        vec3 bitangent = normalize(cross(normal, tangent));
+        normal = normalize(tangent * tangentNormal.x +
+                           bitangent * tangentNormal.y +
+                           normal * tangentNormal.z);
+        if (dot(normal, incomingDirection) > 0.0) normal = -normal;
+    }
 }
 
 void surfaceData(Hit hit,
                  vec3 hitPosition,
                  vec3 incomingDirection,
                  out vec3 normal,
+                 out vec3 tangent,
                  out vec3 baseColor,
-                 out vec4 parameters) {
+                 out vec4 surface,
+                 out vec4 optical,
+                 out vec4 transmission) {
     if (hit.ellipsoidIndex >= 0) {
         vec3 center =
                 camera.ellipsoidCenter[hit.ellipsoidIndex].xyz;
@@ -320,89 +365,189 @@ void surfaceData(Hit hit,
                 quaternionRotate(worldRotation, localNormal));
         if (dot(normal, incomingDirection) > 0.0)
             normal = -normal;
+        tangent = normalize(cross(
+                abs(normal.y) < 0.9 ? vec3(0.0, 1.0, 0.0)
+                                    : vec3(1.0, 0.0, 0.0),
+                normal));
         baseColor = camera.carColor.rgb;
-        parameters = vec4(camera.carColor.a, 0.62, 1.0, 0.0);
+        surface = vec4(camera.carColor.a, 0.48, 0.0, 0.0);
+        optical = vec4(0.0, 1.0, 0.42, 0.16);
+        transmission = vec4(0.0, 1.5, 0.0, 0.0);
     } else {
         uint materialIndex;
-        triangleSurface(hit, incomingDirection, normal, baseColor,
-                        parameters, materialIndex);
+        triangleSurface(hit, incomingDirection, normal, tangent, baseColor,
+                        surface, optical, transmission, materialIndex);
     }
 }
 
-vec3 reflectedSurfaceColor(Hit hit,
+float distributionGgx(float normalHalf, float roughness) {
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
+    float denominator = normalHalf * normalHalf *
+                        (alphaSquared - 1.0) + 1.0;
+    return alphaSquared /
+           max(PI * denominator * denominator, 1.0e-5);
+}
+
+float geometrySchlickGgx(float normalDirection, float roughness) {
+    float amount = roughness + 1.0;
+    float k = amount * amount * 0.125;
+    return normalDirection /
+           max(normalDirection * (1.0 - k) + k, 1.0e-5);
+}
+
+float geometrySmith(float normalView,
+                    float normalLight,
+                    float roughness) {
+    return geometrySchlickGgx(normalView, roughness) *
+           geometrySchlickGgx(normalLight, roughness);
+}
+
+vec3 fresnelSchlick(float cosine, vec3 reflectance) {
+    return reflectance +
+           (vec3(1.0) - reflectance) *
+                   pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+vec3 fresnelSchlickRoughness(float cosine,
+                            vec3 reflectance,
+                            float roughness) {
+    return reflectance +
+           (max(vec3(1.0 - roughness), reflectance) - reflectance) *
+                   pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+vec3 secondarySurfaceColor(Hit hit,
                            vec3 origin,
-                           vec3 direction) {
+                           vec3 direction,
+                           float environmentLod) {
     if (hit.distance >= FAR_DISTANCE * 0.5)
-        return environmentColor(direction);
+        return environmentColor(direction, environmentLod);
     vec3 hitPosition = origin + direction * hit.distance;
     vec3 normal;
+    vec3 tangent;
     vec3 baseColor;
-    vec4 parameters;
-    surfaceData(hit, hitPosition, direction, normal, baseColor,
-                parameters);
-    vec3 environment = environmentColor(normal);
-    return baseColor * (0.12 + environment * 0.32) +
-           baseColor * max(parameters.z, 0.0) * 2.0;
+    vec4 surface;
+    vec4 optical;
+    vec4 transmission;
+    surfaceData(hit, hitPosition, direction, normal, tangent, baseColor,
+                surface, optical, transmission);
+    vec3 environment = environmentColor(normal, 7.0);
+    return baseColor * (0.08 + environment * 0.38) +
+           baseColor * max(surface.z, 0.0) * 2.2;
 }
 
 vec3 realTimeRayTrace(vec3 origin, vec3 direction) {
     Hit hit = traceScene(origin, direction, FAR_DISTANCE);
     if (hit.distance >= FAR_DISTANCE * 0.5)
-        return environmentColor(direction);
+        return environmentColor(direction, 0.0);
 
     vec3 hitPosition = origin + direction * hit.distance;
     vec3 normal;
+    vec3 tangent;
     vec3 baseColor;
-    vec4 parameters;
-    surfaceData(hit, hitPosition, direction, normal, baseColor,
-                parameters);
+    vec4 surface;
+    vec4 optical;
+    vec4 transmission;
+    surfaceData(hit, hitPosition, direction, normal, tangent, baseColor,
+                surface, optical, transmission);
 
-    float roughness = clamp(parameters.x, 0.04, 1.0);
-    float metalness = clamp(parameters.y, 0.0, 1.0);
-    vec3 environment = environmentColor(normal);
+    float roughness = clamp(surface.x, 0.045, 1.0);
+    float metalness = clamp(surface.y, 0.0, 1.0);
+    float specularAmount = clamp(optical.y, 0.0, 1.0);
+    float clearcoatAmount = clamp(optical.z, 0.0, 1.0);
+    float clearcoatRoughness = clamp(optical.w, 0.045, 1.0);
+    vec3 viewDirection = normalize(-direction);
+    vec3 lightDirection = normalize(camera.sunDirection.xyz);
+    vec3 halfDirection = normalize(viewDirection + lightDirection);
+    float normalView = max(dot(normal, viewDirection), 0.001);
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    float normalHalf = max(dot(normal, halfDirection), 0.0);
+    float viewHalf = max(dot(viewDirection, halfDirection), 0.0);
+    vec3 reflectance = mix(
+            vec3(0.04 * max(specularAmount, 0.05)),
+            baseColor, metalness);
+    vec3 fresnel = fresnelSchlick(viewHalf, reflectance);
+    vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metalness);
+
+    vec3 diffuseEnvironment = environmentColor(normal, 7.5);
+    vec3 reflectionDirection = reflect(direction, normal);
+    vec3 specularEnvironment = environmentColor(
+            reflectionDirection, roughness * 8.5);
+    vec3 environmentFresnel = fresnelSchlickRoughness(
+            normalView, reflectance, roughness);
     vec3 radiance =
-            baseColor * (0.11 + environment * 0.30) +
-            baseColor * max(parameters.z, 0.0) * 2.0;
+            diffuseWeight * baseColor * diffuseEnvironment * 0.42 +
+            specularEnvironment * environmentFresnel *
+                    mix(0.24, 0.78, 1.0 - roughness) +
+            baseColor * max(surface.z, 0.0) * 2.2;
 
-    float sunCosine =
-            max(dot(normal, camera.sunDirection.xyz), 0.0);
-    if (sunCosine > 0.0 &&
+    if (normalLight > 0.0 &&
         !sceneOccluded(
                 hitPosition + normal * RAY_EPSILON * 2.0,
-                camera.sunDirection.xyz, FAR_DISTANCE)) {
-        vec3 fresnelColor =
-                mix(vec3(0.04), baseColor, metalness);
-        vec3 diffuse = baseColor * (1.0 - metalness);
-        vec3 reflected = reflect(direction, normal);
-        float specularPower = mix(160.0, 3.0, roughness);
-        float specular = pow(
-                max(dot(reflected, camera.sunDirection.xyz), 0.0),
-                specularPower);
-        radiance += diffuse * sunCosine * 2.8 +
-                    fresnelColor * specular * 3.8;
+                lightDirection, FAR_DISTANCE)) {
+        float distribution = distributionGgx(normalHalf, roughness);
+        float geometry = geometrySmith(normalView, normalLight, roughness);
+        vec3 specular = distribution * geometry * fresnel /
+                max(4.0 * normalView * normalLight, 1.0e-4);
+        vec3 sunRadiance = vec3(3.5, 3.28, 2.92);
+        radiance +=
+                (diffuseWeight * baseColor / PI + specular) *
+                sunRadiance * normalLight;
+
+        if (clearcoatAmount > 0.0) {
+            float coatDistribution = distributionGgx(
+                    normalHalf, clearcoatRoughness);
+            float coatGeometry = geometrySmith(
+                    normalView, normalLight, clearcoatRoughness);
+            vec3 coatFresnel = fresnelSchlick(viewHalf, vec3(0.04));
+            radiance += coatFresnel * coatDistribution * coatGeometry /
+                    max(4.0 * normalView * normalLight, 1.0e-4) *
+                    sunRadiance * normalLight * clearcoatAmount;
+        }
     }
 
-    float viewCosine = max(dot(-direction, normal), 0.0);
-    vec3 fresnel = mix(vec3(0.04), baseColor, metalness) +
-                   (vec3(1.0) -
-                    mix(vec3(0.04), baseColor, metalness)) *
-                           pow(1.0 - viewCosine, 5.0);
     float reflectionStrength =
-            clamp(max(metalness, (1.0 - roughness) * 0.45),
-                  0.0, 0.92);
-    if (reflectionStrength > 0.04) {
-        vec3 reflectionDirection = reflect(direction, normal);
+            clamp(max(metalness, (1.0 - roughness) * 0.38) +
+                          clearcoatAmount * 0.22,
+                  0.0, 0.9);
+    if (reflectionStrength > 0.05) {
         vec3 reflectionOrigin =
                 hitPosition + normal * RAY_EPSILON * 2.0;
         Hit reflectionHit = traceScene(
                 reflectionOrigin, reflectionDirection, FAR_DISTANCE);
-        vec3 reflectionColor = reflectedSurfaceColor(
+        vec3 reflectionColor = secondarySurfaceColor(
                 reflectionHit, reflectionOrigin,
-                reflectionDirection);
-        radiance = mix(
-                radiance, reflectionColor * fresnel +
-                                  radiance * (vec3(1.0) - fresnel),
-                reflectionStrength);
+                reflectionDirection, roughness * 8.5);
+        vec3 localReflectionWeight = clamp(
+                environmentFresnel * reflectionStrength,
+                vec3(0.0), vec3(0.92));
+        radiance = mix(radiance, reflectionColor,
+                       localReflectionWeight);
+    }
+
+    float transmissionFactor = clamp(transmission.x, 0.0, 1.0);
+    if (transmissionFactor > 0.01) {
+        float indexOfRefraction = max(transmission.y, 1.01);
+        vec3 refractionDirection = refract(
+                direction, normal, 1.0 / indexOfRefraction);
+        if (dot(refractionDirection, refractionDirection) > 1.0e-6) {
+            refractionDirection = normalize(refractionDirection);
+            vec3 refractionOrigin =
+                    hitPosition - normal * RAY_EPSILON * 3.0;
+            Hit refractionHit = traceScene(
+                    refractionOrigin, refractionDirection, FAR_DISTANCE);
+            vec3 transmissionColor = secondarySurfaceColor(
+                    refractionHit, refractionOrigin,
+                    refractionDirection, roughness * 7.0);
+            transmissionColor *= mix(vec3(1.0), baseColor, 0.18);
+            float dielectricFresnel =
+                    fresnelSchlick(normalView, vec3(0.04)).r;
+            float transmittedAmount =
+                    transmissionFactor * (1.0 - dielectricFresnel);
+            radiance = mix(radiance, transmissionColor,
+                           clamp(transmittedAmount, 0.0, 0.92));
+        }
     }
     return radiance;
 }

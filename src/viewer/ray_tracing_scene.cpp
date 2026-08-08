@@ -21,6 +21,7 @@ constexpr std::uint32_t kMaterialClassCount = 17u;
 struct GpuVertex {
     std::array<float, 4> position{};
     std::array<float, 4> normal{};
+    std::array<float, 4> tangent{};
     std::array<float, 4> uv{};
     std::array<float, 4> color{};
 };
@@ -36,13 +37,15 @@ struct GpuBvhNode {
 };
 
 struct GpuMaterial {
-    std::array<float, 4> parameters{};
+    std::array<float, 4> surface{};
+    std::array<float, 4> optical{};
+    std::array<float, 4> transmission{};
 };
 
-static_assert(sizeof(GpuVertex) == 64u);
+static_assert(sizeof(GpuVertex) == 80u);
 static_assert(sizeof(GpuTriangle) == 16u);
 static_assert(sizeof(GpuBvhNode) == 48u);
-static_assert(sizeof(GpuMaterial) == 16u);
+static_assert(sizeof(GpuMaterial) == 48u);
 
 struct BuildTriangle {
     GpuTriangle triangle;
@@ -158,6 +161,7 @@ std::shared_ptr<const RayTracingSceneData> BuildRayTracingScene(
             GpuVertex vertex;
             vertex.position = {source[0], source[1], source[2], 1.0f};
             vertex.normal = {source[3], source[4], source[5], 0.0f};
+            vertex.tangent = {source[6], source[7], source[8], 0.0f};
             vertex.uv = {source[9], source[10], source[11], source[12]};
             vertex.color = {source[13], source[14], source[15], source[16]};
             vertices.push_back(vertex);
@@ -224,10 +228,19 @@ std::shared_ptr<const RayTracingSceneData> BuildRayTracingScene(
         const ReplacementMaterial replacement =
                 ReplacementFor(static_cast<ReplacementMaterialClass>(index));
         GpuMaterial material;
-        material.parameters = {
+        material.surface = {
                 replacement.roughness, replacement.metalness,
                 replacement.emissiveStrength,
                 replacement.applyVertexColors ? 1.0f : 0.0f};
+        material.optical = {
+                replacement.normalStrength, replacement.specularAmount,
+                replacement.clearcoatAmount,
+                replacement.clearcoatRoughness};
+        material.transmission = {
+                replacement.transmissionFactor,
+                replacement.indexOfRefraction,
+                replacement.normalTexture.isEmpty() ? 0.0f : 1.0f,
+                replacement.roughnessTexture.isEmpty() ? 0.0f : 1.0f};
         materials.push_back(material);
     }
 

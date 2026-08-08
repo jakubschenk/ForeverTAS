@@ -49,7 +49,7 @@ namespace {
 
 constexpr int kLoadTimeoutMs = 180000;
 constexpr int kRenderTimeoutMs = 30000;
-constexpr int kRequiredSettledFrames = 3;
+constexpr int kRequiredSettledFrames = 8;
 constexpr double kMaximumCaptureAspectRatio = 8.0;
 
 struct CameraOptions {
@@ -652,7 +652,7 @@ int main(int argc, char **argv) {
                 },
                 kRenderTimeoutMs)) {
         PrintError(QStringLiteral(
-                "timed out waiting for three settled D3D11 frames"));
+                "timed out waiting for settled D3D11 frames"));
         return 1;
     }
     countSettledFrames.store(false, std::memory_order_relaxed);
@@ -669,6 +669,8 @@ int main(int argc, char **argv) {
     }
 
     QImage image;
+    QImage previousRayTracingCandidate;
+    int nonBlankRayTracingGrabs = 0;
     ImageStatistics statistics;
     QElapsedTimer captureTimer;
     captureTimer.start();
@@ -696,6 +698,20 @@ int main(int argc, char **argv) {
         }
         statistics = StatisticsFor(candidate);
         if (!IsBlank(candidate, statistics)) {
+            if (rayTracing) {
+                ++nonBlankRayTracingGrabs;
+                const bool stable =
+                        !previousRayTracingCandidate.isNull() &&
+                        candidate == previousRayTracingCandidate;
+                previousRayTracingCandidate = candidate;
+                if (nonBlankRayTracingGrabs <= 2 || !stable) {
+                    captureView->update();
+                    window->requestUpdate();
+                    QCoreApplication::processEvents(
+                            QEventLoop::AllEvents, 50);
+                    continue;
+                }
+            }
             image = std::move(candidate);
             break;
         }
@@ -729,6 +745,12 @@ int main(int argc, char **argv) {
             viewport->property("sceneCameraPosition").value<QVector3D>();
     const QVector3D cameraTarget =
             viewport->property("cameraTarget").value<QVector3D>();
+    const QVector3D boundRayTracingPosition =
+            rayTracingView->property("cameraPosition").value<QVector3D>();
+    const QVector3D boundRayTracingTarget =
+            rayTracingView->property("cameraTarget").value<QVector3D>();
+    const QVector3D boundRayTracingUp =
+            rayTracingView->property("cameraUp").value<QVector3D>();
     const QString rendererName = rayTracing
             ? QStringLiteral("ForeverTAS QRhi compute ray tracer")
             : QStringLiteral("ForeverTAS Qt Quick 3D raster");
@@ -783,7 +805,16 @@ int main(int argc, char **argv) {
                          {QStringLiteral("position"),
                           VectorJson(cameraPosition)},
                          {QStringLiteral("target"),
-                          VectorJson(cameraTarget)}}},
+                          VectorJson(cameraTarget)},
+                         {QStringLiteral("rayTracingPosition"),
+                          VectorJson(boundRayTracingPosition)},
+                         {QStringLiteral("rayTracingTarget"),
+                          VectorJson(boundRayTracingTarget)},
+                         {QStringLiteral("rayTracingUp"),
+                          VectorJson(boundRayTracingUp)},
+                         {QStringLiteral("rayTracingFieldOfView"),
+                          rayTracingView->property("fieldOfView")
+                                  .toDouble()}}},
             {QStringLiteral("scene"),
              QJsonObject{{QStringLiteral("visualBatches"),
                           viewer.visualBatchCount()},

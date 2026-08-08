@@ -134,9 +134,13 @@ bool VisualMaterialsAreBoundAndShared(
         const QList<QObject *> &models,
         const QList<QObject *> &materials,
         const QList<QObject *> &baseTextures,
+        const QList<QObject *> &normalTextures,
+        const QList<QObject *> &roughnessTextures,
         const forevertas::viewer::RaceViewerController &viewer) {
     if (materials.size() != viewer.visualMaterials().size() ||
         baseTextures.size() != materials.size() ||
+        normalTextures.size() != materials.size() ||
+        roughnessTextures.size() != materials.size() ||
         materials.isEmpty() || materials.size() >= models.size()) {
         return false;
     }
@@ -162,8 +166,20 @@ bool VisualMaterialsAreBoundAndShared(
                 material->property("baseColorMap").value<QObject *>();
         QObject *const normalMap =
                 material->property("normalMap").value<QObject *>();
+        QObject *const roughnessMap =
+                material->property("roughnessMap").value<QObject *>();
         QObject *const emissiveMap =
                 material->property("emissiveMap").value<QObject *>();
+        const QString normalSource =
+                definition.value(QStringLiteral("normalTexture")).toString();
+        const QString roughnessSource =
+                definition.value(QStringLiteral("roughnessTexture")).toString();
+        QObject *const expectedNormalMap = normalSource.isEmpty()
+                ? nullptr
+                : normalTextures.at(index);
+        QObject *const expectedRoughnessMap = roughnessSource.isEmpty()
+                ? nullptr
+                : roughnessTextures.at(index);
         const bool emissive =
                 definition.value(QStringLiteral("emissiveStrength"))
                                 .toFloat() > 0.0f;
@@ -173,7 +189,13 @@ bool VisualMaterialsAreBoundAndShared(
         const char *const cullModeName =
                 cullModeProperty.enumerator().valueToKey(
                         material->property("cullMode").toInt());
-        if (!baseTextureObjects.contains(baseMap) || normalMap != nullptr ||
+        if (!baseTextureObjects.contains(baseMap) ||
+            normalMap != expectedNormalMap ||
+            roughnessMap != expectedRoughnessMap ||
+            normalTextures.at(index)->property("source").toUrl() !=
+                    QUrl(normalSource) ||
+            roughnessTextures.at(index)->property("source").toUrl() !=
+                    QUrl(roughnessSource) ||
             (emissive ? emissiveMap != baseMap : emissiveMap != nullptr) ||
             !qFuzzyCompare(material->property("opacity").toFloat(), 1.0f) ||
             cullModeName == nullptr ||
@@ -219,8 +241,10 @@ bool FilledModelsHaveBakedRunPalettes(
     }
     for (const QObject *material : materials) {
         if (!material->property("vertexColorsEnabled").toBool() ||
-            material->property("diffuseColor").value<QColor>() !=
-                    QColor(Qt::white)) {
+            material->property("baseColor").value<QColor>() !=
+                    QColor(Qt::white) ||
+            material->property("roughness").toFloat() >= 0.5f ||
+            material->property("clearcoatAmount").toFloat() <= 0.0f) {
             return false;
         }
     }
@@ -5421,6 +5445,15 @@ int main(int argc, char **argv) {
                                         root->findChildren<QObject *>(
                                                 QStringLiteral(
                                                         "trackVisualBaseTexture"));
+                                const QList<QObject *> visualNormalTextures =
+                                        root->findChildren<QObject *>(
+                                                QStringLiteral(
+                                                        "trackVisualNormalTexture"));
+                                const QList<QObject *>
+                                        visualRoughnessTextures =
+                                                root->findChildren<QObject *>(
+                                                        QStringLiteral(
+                                                                "trackVisualRoughnessTexture"));
                                 const auto materialState =
                                         [](const QObject *material) {
                                             return QVariantList{
@@ -5431,9 +5464,21 @@ int main(int argc, char **argv) {
                                                     material->property(
                                                             "normalMap"),
                                                     material->property(
+                                                            "roughnessMap"),
+                                                    material->property(
                                                             "roughness"),
                                                     material->property(
                                                             "metalness"),
+                                                    material->property(
+                                                            "normalStrength"),
+                                                    material->property(
+                                                            "specularAmount"),
+                                                    material->property(
+                                                            "clearcoatAmount"),
+                                                    material->property(
+                                                            "transmissionFactor"),
+                                                    material->property(
+                                                            "indexOfRefraction"),
                                                     material->property(
                                                             "opacity"),
                                                     material->property(
@@ -5631,11 +5676,9 @@ int main(int argc, char **argv) {
                                                 visualModels,
                                                 visualMaterials,
                                                 visualBaseTextures,
+                                                visualNormalTextures,
+                                                visualRoughnessTextures,
                                                 viewer) &&
-                                        root->findChildren<QObject *>(
-                                                    QStringLiteral(
-                                                            "trackVisualNormalTexture"))
-                                                .isEmpty() &&
                                         ModelsHaveState(carFilledModels,
                                                         expectedCarModels,
                                                         true) &&
@@ -5670,6 +5713,64 @@ int main(int argc, char **argv) {
                                                  ->property("status")
                                                  .toString()
                                                  .isEmpty();
+                                if (gpuRayTracingView != nullptr &&
+                                    viewport != nullptr) {
+                                    const bool savedFreeCamera =
+                                            viewport
+                                                    ->property("freeCamera")
+                                                    .toBool();
+                                    const bool savedOrbitalCamera =
+                                            viewport
+                                                    ->property(
+                                                            "orbitalCamera")
+                                                    .toBool();
+                                    const double savedOrbitDistance =
+                                            viewport
+                                                    ->property(
+                                                            "orbitDistance")
+                                                    .toDouble();
+                                    viewport->setProperty("freeCamera", false);
+                                    viewport->setProperty(
+                                            "orbitalCamera", true);
+                                    QCoreApplication::processEvents();
+                                    const QVector3D initialCameraPosition =
+                                            gpuRayTracingView
+                                                    ->property(
+                                                            "cameraPosition")
+                                                    .value<QVector3D>();
+                                    viewport->setProperty(
+                                            "orbitDistance",
+                                            savedOrbitDistance + 7.0);
+                                    QCoreApplication::processEvents();
+                                    const QVector3D expectedCameraPosition =
+                                            viewport
+                                                    ->property(
+                                                            "sceneCameraPosition")
+                                                    .value<QVector3D>();
+                                    const QVector3D movedCameraPosition =
+                                            gpuRayTracingView
+                                                    ->property(
+                                                            "cameraPosition")
+                                                    .value<QVector3D>();
+                                    rayTracingModeValid &=
+                                            (movedCameraPosition -
+                                             expectedCameraPosition)
+                                                            .length() <
+                                                    0.001f &&
+                                            (movedCameraPosition -
+                                             initialCameraPosition)
+                                                            .length() >
+                                                    6.9f;
+                                    viewport->setProperty(
+                                            "orbitDistance",
+                                            savedOrbitDistance);
+                                    viewport->setProperty(
+                                            "orbitalCamera",
+                                            savedOrbitalCamera);
+                                    viewport->setProperty(
+                                            "freeCamera", savedFreeCamera);
+                                    QCoreApplication::processEvents();
+                                }
                                 if (rayTracingSupported) {
                                     root->setProperty(
                                             "renderMode",
@@ -5729,16 +5830,38 @@ int main(int argc, char **argv) {
                                                                 .toDouble() <=
                                                 50001.0 &&
                                         mainMapLight != nullptr &&
-                                        !mainMapLight->property("castsShadow")
-                                                 .toBool() &&
+                                        mainMapLight->property("castsShadow")
+                                                .toBool() &&
+                                        mainMapLight
+                                                        ->property(
+                                                                "shadowFactor")
+                                                        .toDouble() >=
+                                                70.0 &&
                                         std::all_of(
                                                 visualModels.cbegin(),
                                                 visualModels.cend(),
                                                 [](const QObject *model) {
-                                                    return !model->property(
-                                                                         "casts"
-                                                                         "Shado"
-                                                                         "ws")
+                                                    const QString materialClass =
+                                                            model->property(
+                                                                         "modelData")
+                                                                    .toMap()
+                                                                    .value(
+                                                                            QStringLiteral(
+                                                                                    "materialClass"))
+                                                                    .toString();
+                                                    const bool expectedCasting =
+                                                            materialClass !=
+                                                                    QStringLiteral(
+                                                                            "Glass") &&
+                                                            materialClass !=
+                                                                    QStringLiteral(
+                                                                            "Water");
+                                                    return model->property(
+                                                                        "castsShadows")
+                                                                           .toBool() ==
+                                                                    expectedCasting &&
+                                                            model->property(
+                                                                         "receivesShadows")
                                                                     .toBool();
                                                 });
                                 const QUrl skySource =
@@ -5756,6 +5879,22 @@ int main(int argc, char **argv) {
                                                                 "probeExposure")
                                                         .toDouble() >=
                                                 0.8 &&
+                                        mapEnvironment
+                                                ->property(
+                                                        "depthPrePassEnabled")
+                                                .toBool() &&
+                                        mapEnvironment
+                                                ->property("aoEnabled")
+                                                .toBool() &&
+                                        mapEnvironment
+                                                        ->property("aoStrength")
+                                                        .toDouble() >=
+                                                50.0 &&
+                                        mapEnvironment
+                                                        ->property(
+                                                                "aoSampleRate")
+                                                        .toInt() >=
+                                                4 &&
                                         mapEnvironment
                                                         ->property(
                                                                 "skyboxBlur"
@@ -5869,7 +6008,27 @@ int main(int argc, char **argv) {
                                                                     ->property(
                                                                             "normalMap")
                                                                     .value<QObject *>() ==
-                                                            nullptr;
+                                                            nullptr &&
+                                                            material
+                                                                    ->property(
+                                                                            "roughnessMap")
+                                                                    .value<QObject *>() ==
+                                                            nullptr &&
+                                                            qFuzzyIsNull(
+                                                                    material
+                                                                            ->property(
+                                                                                    "normalStrength")
+                                                                            .toFloat()) &&
+                                                            qFuzzyIsNull(
+                                                                    material
+                                                                            ->property(
+                                                                                    "clearcoatAmount")
+                                                                            .toFloat()) &&
+                                                            qFuzzyIsNull(
+                                                                    material
+                                                                            ->property(
+                                                                                    "transmissionFactor")
+                                                                            .toFloat());
                                                 });
                                 root->setProperty(
                                         "renderMode",

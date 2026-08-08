@@ -191,18 +191,73 @@ bool TestReplacementParametersAndTextures() {
             "painted_metal", "plastic", "rubber", "glass", "signage",
             "emissive", "turbo", "checkpoint", "start_finish", "water",
             "neutral", "unknown"}};
+    struct DetailExpectation {
+        ReplacementMaterialClass materialClass;
+        const char *stem;
+    };
+    constexpr std::array<DetailExpectation, 5> detailExpectations{{
+            {ReplacementMaterialClass::Asphalt, "asphalt"},
+            {ReplacementMaterialClass::Dirt, "dirt"},
+            {ReplacementMaterialClass::Metal, "metal"},
+            {ReplacementMaterialClass::PaintedMetal, "painted_metal"},
+            {ReplacementMaterialClass::Rubber, "rubber"},
+    }};
     QSet<QByteArray> baseTextureHashes;
+    QSet<QByteArray> normalTextureHashes;
+    QSet<QByteArray> roughnessTextureHashes;
+    QSet<QString> expectedAssetFiles;
     const QString root = QStringLiteral(FOREVERTAS_SOURCE_DIR) +
             QStringLiteral("/assets/materials/");
-    for (const char *name : names) {
+    for (std::size_t index = 0u; index < names.size(); ++index) {
+        const char *const name = names[index];
+        const auto materialClass =
+                static_cast<ReplacementMaterialClass>(index);
+        const auto replacement = ReplacementFor(materialClass);
+        const QString baseFileName = QString::fromLatin1(name) +
+                QStringLiteral("_base.png");
+        expectedAssetFiles.insert(baseFileName);
         const QString basePath = root + QString::fromLatin1(name) +
                 QStringLiteral("_base.png");
         const QImage baseImage(basePath);
+        okay &= Check(
+                replacement.materialClass == materialClass &&
+                        !replacement.name.isEmpty() &&
+                        replacement.debugColor.isValid() &&
+                        replacement.baseTexture ==
+                                QStringLiteral("qrc:/materials/") +
+                                        baseFileName,
+                "replacement identity metadata was invalid");
+        okay &= Check(
+                std::isfinite(replacement.roughness) &&
+                        replacement.roughness >= 0.0f &&
+                        replacement.roughness <= 1.0f &&
+                        std::isfinite(replacement.metalness) &&
+                        replacement.metalness >= 0.0f &&
+                        replacement.metalness <= 1.0f &&
+                        std::isfinite(replacement.normalStrength) &&
+                        replacement.normalStrength >= 0.0f &&
+                        replacement.normalStrength <= 1.0f &&
+                        std::isfinite(replacement.specularAmount) &&
+                        replacement.specularAmount >= 0.0f &&
+                        replacement.specularAmount <= 1.0f &&
+                        std::isfinite(replacement.clearcoatAmount) &&
+                        replacement.clearcoatAmount >= 0.0f &&
+                        replacement.clearcoatAmount <= 1.0f &&
+                        std::isfinite(replacement.clearcoatRoughness) &&
+                        replacement.clearcoatRoughness >= 0.0f &&
+                        replacement.clearcoatRoughness <= 1.0f &&
+                        std::isfinite(replacement.transmissionFactor) &&
+                        replacement.transmissionFactor >= 0.0f &&
+                        replacement.transmissionFactor <= 1.0f &&
+                        std::isfinite(replacement.indexOfRefraction) &&
+                        replacement.indexOfRefraction >= 1.0f &&
+                        replacement.indexOfRefraction <= 3.0f,
+                "replacement PBR scalar metadata was outside valid bounds");
         okay &= Check(!baseImage.isNull(),
                       "replacement base texture did not load");
-        okay &= Check(baseImage.width() >= 512 &&
-                              baseImage.height() >= 512,
-                      "replacement texture is undersized");
+        okay &= Check(baseImage.width() == 512 &&
+                              baseImage.height() == 512,
+                      "replacement base texture was not exactly 512 square");
         if (std::string(name) != "concrete") {
             QSet<QRgb> sampledBaseColors;
             for (int y = 0; y < baseImage.height(); y += 4) {
@@ -225,13 +280,129 @@ bool TestReplacementParametersAndTextures() {
     okay &= Check(baseTextureHashes.size() ==
                           static_cast<qsizetype>(names.size()),
                   "replacement base textures are not visibly distinct assets");
-    const QDir materialDirectory(root);
+
+    for (const DetailExpectation &expectation : detailExpectations) {
+        const QString stem = QString::fromLatin1(expectation.stem);
+        const QString normalFileName =
+                stem + QStringLiteral("_normal.png");
+        const QString roughnessFileName =
+                stem + QStringLiteral("_roughness.png");
+        expectedAssetFiles.insert(normalFileName);
+        expectedAssetFiles.insert(roughnessFileName);
+        const auto replacement = ReplacementFor(expectation.materialClass);
+        okay &= Check(
+                replacement.normalTexture ==
+                                QStringLiteral("qrc:/materials/") +
+                                        normalFileName &&
+                        replacement.roughnessTexture ==
+                                QStringLiteral("qrc:/materials/") +
+                                        roughnessFileName &&
+                        replacement.normalStrength > 0.0f,
+                "photo-scanned replacement did not expose its PBR maps");
+
+        const QString normalPath = root + normalFileName;
+        const QString roughnessPath = root + roughnessFileName;
+        const QImage normalImage(normalPath);
+        const QImage roughnessImage(roughnessPath);
+        okay &= Check(!normalImage.isNull() &&
+                              normalImage.width() == 512 &&
+                              normalImage.height() == 512,
+                      "replacement normal map was not a 512 square image");
+        okay &= Check(!roughnessImage.isNull() &&
+                              roughnessImage.width() == 512 &&
+                              roughnessImage.height() == 512,
+                      "replacement roughness map was not a 512 square image");
+
+        QSet<QRgb> sampledNormalColors;
+        QSet<QRgb> sampledRoughnessColors;
+        std::int64_t normalRed = 0;
+        std::int64_t normalGreen = 0;
+        std::int64_t normalBlue = 0;
+        bool roughnessIsGrayscale = true;
+        for (int y = 0; y < 512; y += 4) {
+            for (int x = 0; x < 512; x += 4) {
+                const QColor normal = normalImage.pixelColor(x, y);
+                const QColor roughness = roughnessImage.pixelColor(x, y);
+                sampledNormalColors.insert(normal.rgba());
+                sampledRoughnessColors.insert(roughness.rgba());
+                normalRed += normal.red();
+                normalGreen += normal.green();
+                normalBlue += normal.blue();
+                roughnessIsGrayscale &=
+                        roughness.red() == roughness.green() &&
+                        roughness.green() == roughness.blue();
+            }
+        }
+        okay &= Check(
+                sampledNormalColors.size() > 64 &&
+                        normalBlue > normalRed &&
+                        normalBlue > normalGreen,
+                "replacement normal map was not tangent-space detail");
+        okay &= Check(
+                sampledRoughnessColors.size() > 8 && roughnessIsGrayscale,
+                "replacement roughness map lacked scalar surface detail");
+
+        QFile normalFile(normalPath);
+        QFile roughnessFile(roughnessPath);
+        okay &= Check(normalFile.open(QIODevice::ReadOnly) &&
+                              roughnessFile.open(QIODevice::ReadOnly),
+                      "replacement PBR texture bytes were not readable");
+        if (normalFile.isOpen()) {
+            normalTextureHashes.insert(QCryptographicHash::hash(
+                    normalFile.readAll(), QCryptographicHash::Sha256));
+        }
+        if (roughnessFile.isOpen()) {
+            roughnessTextureHashes.insert(QCryptographicHash::hash(
+                    roughnessFile.readAll(), QCryptographicHash::Sha256));
+        }
+    }
     okay &= Check(
-            materialDirectory.entryList(
-                                     {QStringLiteral("*_normal.png")},
-                                     QDir::Files)
-                    .isEmpty(),
-            "unused raster-only normal-map assets remain packaged");
+            normalTextureHashes.size() ==
+                            static_cast<qsizetype>(detailExpectations.size()) &&
+                    roughnessTextureHashes.size() ==
+                            static_cast<qsizetype>(detailExpectations.size()),
+            "replacement PBR maps were duplicated assets");
+
+    for (std::size_t index = 0u; index < names.size(); ++index) {
+        const auto materialClass =
+                static_cast<ReplacementMaterialClass>(index);
+        const bool expectsDetail = std::any_of(
+                detailExpectations.cbegin(), detailExpectations.cend(),
+                [materialClass](const DetailExpectation &expectation) {
+                    return expectation.materialClass == materialClass;
+                });
+        const auto replacement = ReplacementFor(materialClass);
+        okay &= Check(
+                expectsDetail ||
+                        (replacement.normalTexture.isEmpty() &&
+                         replacement.roughnessTexture.isEmpty() &&
+                         replacement.normalStrength == 0.0f),
+                "generated or flat replacement fabricated PBR detail maps");
+    }
+
+    const auto glass = ReplacementFor(ReplacementMaterialClass::Glass);
+    const auto water = ReplacementFor(ReplacementMaterialClass::Water);
+    const auto metal = ReplacementFor(ReplacementMaterialClass::Metal);
+    const auto paintedMetal =
+            ReplacementFor(ReplacementMaterialClass::PaintedMetal);
+    okay &= Check(
+            glass.transmissionFactor > 0.8f &&
+                    water.transmissionFactor > 0.7f &&
+                    glass.indexOfRefraction > water.indexOfRefraction &&
+                    metal.specularAmount > dirt.specularAmount &&
+                    paintedMetal.clearcoatAmount > 0.0f &&
+                    paintedMetal.clearcoatRoughness > 0.0f,
+            "replacement optical metadata was not material-specific");
+
+    const QDir materialDirectory(root);
+    QSet<QString> actualAssetFiles;
+    const QStringList materialFiles = materialDirectory.entryList(
+            {QStringLiteral("*.png")}, QDir::Files, QDir::Name);
+    for (const QString &materialFile : materialFiles) {
+        actualAssetFiles.insert(materialFile);
+    }
+    okay &= Check(actualAssetFiles == expectedAssetFiles,
+                  "replacement material PNG asset set was not exact");
 
     const QImage concreteBase(root +
                               QStringLiteral("concrete_base.png"));
@@ -644,6 +815,9 @@ bool TestStaticBatching() {
                     rayTracingScene->bvhNodeCount <
                             rayTracingScene->triangleCount * 2u &&
                     rayTracingScene->materialCount == 17u &&
+                    rayTracingScene->vertices.size() ==
+                            static_cast<qsizetype>(
+                                    rayTracingScene->vertexCount * 80u) &&
                     rayTracingScene->triangles.size() ==
                             static_cast<qsizetype>(
                                     rayTracingScene->triangleCount * 16u) &&
@@ -655,12 +829,12 @@ bool TestStaticBatching() {
     if (rayTracingScene != nullptr) {
         okay &= Check(
                 rayTracingScene->materials.size() ==
-                        static_cast<qsizetype>(17u * 4u * sizeof(float)),
+                        static_cast<qsizetype>(17u * 12u * sizeof(float)),
                 "ray tracing material table did not use the unified surface "
                 "layout");
         if (rayTracingScene->materials.size() ==
-            static_cast<qsizetype>(17u * 4u * sizeof(float))) {
-            std::array<float, 17u * 4u> parameters{};
+            static_cast<qsizetype>(17u * 12u * sizeof(float))) {
+            std::array<float, 17u * 12u> parameters{};
             std::memcpy(parameters.data(),
                         rayTracingScene->materials.constData(),
                         rayTracingScene->materials.size());
@@ -668,7 +842,7 @@ bool TestStaticBatching() {
                 const auto replacement = ReplacementFor(
                         static_cast<ReplacementMaterialClass>(index));
                 const float *const material =
-                        parameters.data() + index * 4u;
+                        parameters.data() + index * 12u;
                 okay &= Check(
                         std::fabs(material[0] - replacement.roughness) <
                                         0.0001f &&
@@ -676,10 +850,32 @@ bool TestStaticBatching() {
                                           replacement.metalness) <
                                         0.0001f &&
                                 std::fabs(material[2] -
-                                          replacement.emissiveStrength) <
+                                           replacement.emissiveStrength) <
                                         0.0001f &&
                                 (material[3] > 0.5f) ==
-                                        replacement.applyVertexColors,
+                                        replacement.applyVertexColors &&
+                                std::fabs(material[4] -
+                                          replacement.normalStrength) <
+                                        0.0001f &&
+                                std::fabs(material[5] -
+                                          replacement.specularAmount) <
+                                        0.0001f &&
+                                std::fabs(material[6] -
+                                          replacement.clearcoatAmount) <
+                                        0.0001f &&
+                                std::fabs(material[7] -
+                                          replacement.clearcoatRoughness) <
+                                        0.0001f &&
+                                std::fabs(material[8] -
+                                          replacement.transmissionFactor) <
+                                        0.0001f &&
+                                std::fabs(material[9] -
+                                          replacement.indexOfRefraction) <
+                                        0.0001f &&
+                                (material[10] > 0.5f) ==
+                                        !replacement.normalTexture.isEmpty() &&
+                                (material[11] > 0.5f) ==
+                                        !replacement.roughnessTexture.isEmpty(),
                         "ray tracing material table diverged from the shared "
                         "replacement contract");
             }
@@ -883,9 +1079,18 @@ bool TestRayTracingShaders() {
             "ray tracing camera inverted the viewport Y coordinate");
     okay &= Check(
             rayTracingSource.contains(
-                    "bool usesVertexColor = parameters.w > 0.5;") &&
+                    "bool usesVertexColor = surface.w > 0.5;") &&
                     rayTracingSource.contains(
-                            "max(parameters.z, 0.0) * 2.0") &&
+                            "max(surface.z, 0.0) * 2.2") &&
+                    rayTracingSource.contains("distributionGgx") &&
+                    rayTracingSource.contains("geometrySmith") &&
+                    rayTracingSource.contains("fresnelSchlick") &&
+                    rayTracingSource.contains("materialNormalTextures") &&
+                    rayTracingSource.contains("materialRoughnessTextures") &&
+                    rayTracingSource.contains(
+                            "surface.x = clamp(surface.x * textureLod(") &&
+                    rayTracingSource.contains(
+                            "layout(rgba16f, binding = 9)") &&
                     !rayTracingSource.contains("materialIndex > 3u") &&
                     !rayTracingSource.contains("materialIndex != 15u"),
             "ray tracing shader bypassed the shared material contract");

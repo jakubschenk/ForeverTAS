@@ -113,6 +113,8 @@ private:
     std::unique_ptr<QRhiBuffer> materialBuffer_;
     std::unique_ptr<QRhiBuffer> uniformBuffer_;
     std::unique_ptr<QRhiTexture> materialTextures_;
+    std::unique_ptr<QRhiTexture> materialNormalTextures_;
+    std::unique_ptr<QRhiTexture> materialRoughnessTextures_;
     std::unique_ptr<QRhiTexture> environmentTexture_;
     std::unique_ptr<QRhiTexture> outputTexture_;
     std::unique_ptr<QRhiSampler> materialSampler_;
@@ -134,6 +136,8 @@ void GpuRayTracingRenderer::releaseResources() {
     materialSampler_.reset();
     outputTexture_.reset();
     environmentTexture_.reset();
+    materialRoughnessTextures_.reset();
+    materialNormalTextures_.reset();
     materialTextures_.reset();
     uniformBuffer_.reset();
     materialBuffer_.reset();
@@ -282,16 +286,26 @@ bool GpuRayTracingRenderer::createSceneResources(
         return false;
     }
 
-    const QRhiTexture::Flags mipmappedTextureFlags =
+    const QRhiTexture::Flags colorTextureFlags =
             QRhiTexture::sRGB | QRhiTexture::MipMapped |
             QRhiTexture::UsedWithGenerateMips;
+    const QRhiTexture::Flags dataTextureFlags =
+            QRhiTexture::MipMapped | QRhiTexture::UsedWithGenerateMips;
     materialTextures_.reset(rhi_->newTextureArray(
             QRhiTexture::RGBA8, kMaterialCount, QSize(512, 512), 1,
-            mipmappedTextureFlags));
+            colorTextureFlags));
+    materialNormalTextures_.reset(rhi_->newTextureArray(
+            QRhiTexture::RGBA8, kMaterialCount, QSize(512, 512), 1,
+            dataTextureFlags));
+    materialRoughnessTextures_.reset(rhi_->newTextureArray(
+            QRhiTexture::RGBA8, kMaterialCount, QSize(512, 512), 1,
+            dataTextureFlags));
     environmentTexture_.reset(rhi_->newTexture(
             QRhiTexture::RGBA8, QSize(2048, 1024), 1,
-            mipmappedTextureFlags));
+            colorTextureFlags));
     if (!materialTextures_->create() ||
+        !materialNormalTextures_->create() ||
+        !materialRoughnessTextures_->create() ||
         !environmentTexture_->create()) {
         if (!failureReported_) {
             qWarning() << "GPU ray tracing could not create source textures";
@@ -331,7 +345,11 @@ bool GpuRayTracingRenderer::createSceneResources(
                                 scene_->materials);
 
     std::vector<QRhiTextureUploadEntry> textureEntries;
+    std::vector<QRhiTextureUploadEntry> normalEntries;
+    std::vector<QRhiTextureUploadEntry> roughnessEntries;
     textureEntries.reserve(kMaterialCount);
+    normalEntries.reserve(kMaterialCount);
+    roughnessEntries.reserve(kMaterialCount);
     for (int index = 0; index < kMaterialCount; ++index) {
         const ReplacementMaterial replacement = ReplacementFor(
                 static_cast<ReplacementMaterialClass>(index));
@@ -342,12 +360,56 @@ bool GpuRayTracingRenderer::createSceneResources(
         textureEntries.emplace_back(
                 index, 0,
                 QRhiTextureSubresourceUploadDescription(image));
+
+        QImage normalImage;
+        if (!replacement.normalTexture.isEmpty()) {
+            normalImage.load(ResourcePath(replacement.normalTexture));
+        }
+        if (normalImage.isNull()) {
+            normalImage = QImage(512, 512, QImage::Format_RGBA8888);
+            normalImage.fill(QColor::fromRgb(128, 128, 255, 255));
+        } else {
+            normalImage = normalImage.convertToFormat(QImage::Format_RGBA8888)
+                                  .scaled(512, 512, Qt::IgnoreAspectRatio,
+                                          Qt::SmoothTransformation);
+        }
+        normalEntries.emplace_back(
+                index, 0,
+                QRhiTextureSubresourceUploadDescription(normalImage));
+
+        QImage roughnessImage;
+        if (!replacement.roughnessTexture.isEmpty()) {
+            roughnessImage.load(ResourcePath(replacement.roughnessTexture));
+        }
+        if (roughnessImage.isNull()) {
+            roughnessImage = QImage(512, 512, QImage::Format_RGBA8888);
+            roughnessImage.fill(Qt::white);
+        } else {
+            roughnessImage =
+                    roughnessImage.convertToFormat(QImage::Format_RGBA8888)
+                            .scaled(512, 512, Qt::IgnoreAspectRatio,
+                                    Qt::SmoothTransformation);
+        }
+        roughnessEntries.emplace_back(
+                index, 0,
+                QRhiTextureSubresourceUploadDescription(roughnessImage));
     }
     QRhiTextureUploadDescription textureUpload;
     textureUpload.setEntries(textureEntries.cbegin(),
                              textureEntries.cend());
     updates->uploadTexture(materialTextures_.get(), textureUpload);
     updates->generateMips(materialTextures_.get());
+
+    QRhiTextureUploadDescription normalUpload;
+    normalUpload.setEntries(normalEntries.cbegin(), normalEntries.cend());
+    updates->uploadTexture(materialNormalTextures_.get(), normalUpload);
+    updates->generateMips(materialNormalTextures_.get());
+
+    QRhiTextureUploadDescription roughnessUpload;
+    roughnessUpload.setEntries(roughnessEntries.cbegin(),
+                               roughnessEntries.cend());
+    updates->uploadTexture(materialRoughnessTextures_.get(), roughnessUpload);
+    updates->generateMips(materialRoughnessTextures_.get());
 
     QImage environment(QStringLiteral(
             ":/environment/day_sky.png"));
@@ -369,7 +431,7 @@ bool GpuRayTracingRenderer::createOutputResources() {
     if (!outputSize_.isValid() || outputSize_.isEmpty()) return false;
 
     outputTexture_.reset(rhi_->newTexture(
-            QRhiTexture::RGBA32F, outputSize_, 1,
+            QRhiTexture::RGBA16F, outputSize_, 1,
             QRhiTexture::UsedWithLoadStore));
     if (!outputTexture_->create()) {
         if (!failureReported_) {
@@ -402,10 +464,16 @@ bool GpuRayTracingRenderer::createOutputResources() {
                     materialTextures_.get(), materialSampler_.get()),
             QRhiShaderResourceBinding::sampledTexture(
                     6, QRhiShaderResourceBinding::ComputeStage,
+                    materialNormalTextures_.get(), materialSampler_.get()),
+            QRhiShaderResourceBinding::sampledTexture(
+                    7, QRhiShaderResourceBinding::ComputeStage,
+                    materialRoughnessTextures_.get(), materialSampler_.get()),
+            QRhiShaderResourceBinding::sampledTexture(
+                    8, QRhiShaderResourceBinding::ComputeStage,
                     environmentTexture_.get(),
                     environmentSampler_.get()),
             QRhiShaderResourceBinding::imageLoadStore(
-                    7, QRhiShaderResourceBinding::ComputeStage,
+                    9, QRhiShaderResourceBinding::ComputeStage,
                     outputTexture_.get(), 0),
     });
     if (!computeBindings_->create()) {
@@ -528,7 +596,7 @@ void GpuRayTracingRenderer::render(
     if (!active_ || scene_ == nullptr ||
         !rhi_->isFeatureSupported(QRhi::Compute) ||
         !rhi_->isFeatureSupported(QRhi::TextureArrays) ||
-        !rhi_->isTextureFormatSupported(QRhiTexture::RGBA32F)) {
+        !rhi_->isTextureFormatSupported(QRhiTexture::RGBA16F)) {
         commandBuffer->beginPass(
                 renderTarget(), clearColor, {1.0f, 0});
         commandBuffer->endPass();

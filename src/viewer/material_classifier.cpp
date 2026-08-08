@@ -107,6 +107,20 @@ bool IsSurface(std::uint8_t surfaceId,
     return std::find(values.begin(), values.end(), surfaceId) != values.end();
 }
 
+QString TexturePath(const char *texture) {
+    return QStringLiteral("qrc:/materials/") +
+            QString::fromLatin1(texture);
+}
+
+void SetDetailMaps(ReplacementMaterial &material,
+                   const char *normalTexture,
+                   const char *roughnessTexture,
+                   float normalStrength) {
+    material.normalTexture = TexturePath(normalTexture);
+    material.roughnessTexture = TexturePath(roughnessTexture);
+    material.normalStrength = normalStrength;
+}
+
 ReplacementMaterialClass ClassifySemanticContext(
         const forevervalidator::experimental::PhysicsSandboxRenderMaterial
                 &material,
@@ -176,9 +190,7 @@ ReplacementMaterial Make(
     result.materialClass = materialClass;
     result.name = QString::fromLatin1(name);
     result.debugColor = QColor(QString::fromLatin1(debugColor));
-    result.baseTexture =
-            QStringLiteral("qrc:/materials/") +
-            QString::fromLatin1(texture);
+    result.baseTexture = TexturePath(texture);
     result.roughness = roughness;
     result.metalness = metalness;
     return result;
@@ -275,76 +287,132 @@ ReplacementMaterial ReplacementFor(
     case ReplacementMaterialClass::Asphalt:
         result = Make(materialClass, "Asphalt", "#343434",
                       "asphalt_base.png", 0.88f, 0.0f);
+        SetDetailMaps(result, "asphalt_normal.png",
+                      "asphalt_roughness.png", 0.45f);
+        result.specularAmount = 0.34f;
         result.worldUvScale = 0.25f;
         result.applyVertexColors = false;
         return result;
     case ReplacementMaterialClass::Concrete:
         result = Make(materialClass, "Concrete", "#d8d8d8",
                       "concrete_base.png", 0.82f, 0.0f);
+        result.specularAmount = 0.32f;
         result.worldUvScale = 0.25f;
         result.applyVertexColors = false;
         return result;
     case ReplacementMaterialClass::Dirt:
         result = Make(materialClass, "Dirt", "#9c5b22",
                       "dirt_base.png", 0.94f, 0.0f);
+        SetDetailMaps(result, "dirt_normal.png",
+                      "dirt_roughness.png", 0.55f);
+        result.specularAmount = 0.26f;
+        result.indexOfRefraction = 1.45f;
         result.worldUvScale = 0.25f;
         result.applyVertexColors = false;
         return result;
     case ReplacementMaterialClass::Grass:
         result = Make(materialClass, "Grass", "#40d153",
                       "grass_base.png", 0.9f, 0.0f);
+        result.specularAmount = 0.28f;
         result.worldUvScale = 0.25f;
         result.applyVertexColors = false;
         return result;
     case ReplacementMaterialClass::Metal:
-        return Make(materialClass, "Metal", "#8ea6ff",
-                    "metal_base.png", 0.34f, 0.82f);
+        result = Make(materialClass, "Metal", "#8ea6ff",
+                      "metal_base.png", 0.34f, 0.82f);
+        SetDetailMaps(result, "metal_normal.png",
+                      "metal_roughness.png", 0.48f);
+        result.specularAmount = 0.9f;
+        return result;
     case ReplacementMaterialClass::PaintedMetal:
-        return Make(materialClass, "Painted metal", "#ff536e",
-                    "painted_metal_base.png", 0.42f, 0.58f);
+        result = Make(materialClass, "Painted metal", "#ff536e",
+                      "painted_metal_base.png", 0.42f, 0.58f);
+        SetDetailMaps(result, "painted_metal_normal.png",
+                      "painted_metal_roughness.png", 0.38f);
+        result.specularAmount = 0.55f;
+        result.clearcoatAmount = 0.18f;
+        result.clearcoatRoughness = 0.32f;
+        result.indexOfRefraction = 1.52f;
+        return result;
     case ReplacementMaterialClass::Plastic:
-        return Make(materialClass, "Plastic", "#ffb347",
-                    "plastic_base.png", 0.46f, 0.0f);
+        result = Make(materialClass, "Plastic", "#ffb347",
+                      "plastic_base.png", 0.46f, 0.0f);
+        result.specularAmount = 0.46f;
+        result.clearcoatAmount = 0.08f;
+        result.clearcoatRoughness = 0.38f;
+        result.indexOfRefraction = 1.46f;
+        return result;
     case ReplacementMaterialClass::Rubber:
-        return Make(materialClass, "Rubber", "#7f50a8",
-                    "rubber_base.png", 0.96f, 0.0f);
+        result = Make(materialClass, "Rubber", "#7f50a8",
+                      "rubber_base.png", 0.96f, 0.0f);
+        SetDetailMaps(result, "rubber_normal.png",
+                      "rubber_roughness.png", 0.52f);
+        result.specularAmount = 0.24f;
+        result.indexOfRefraction = 1.52f;
+        return result;
     case ReplacementMaterialClass::Glass:
-        return Make(materialClass, "Glass", "#55dff5",
-                    "glass_base.png", 0.12f, 0.05f);
+        result = Make(materialClass, "Glass", "#55dff5",
+                      "glass_base.png", 0.12f, 0.05f);
+        result.specularAmount = 1.0f;
+        result.transmissionFactor = 0.92f;
+        result.indexOfRefraction = 1.52f;
+        return result;
     case ReplacementMaterialClass::Signage:
-        return Make(materialClass, "Signage", "#ffe347",
-                    "signage_base.png", 0.48f, 0.0f);
+        result = Make(materialClass, "Signage", "#ffe347",
+                      "signage_base.png", 0.48f, 0.0f);
+        result.specularAmount = 0.43f;
+        result.clearcoatAmount = 0.08f;
+        result.clearcoatRoughness = 0.42f;
+        return result;
     case ReplacementMaterialClass::Emissive:
         result = Make(materialClass, "Emissive", "#ff4fd2",
                       "emissive_base.png", 0.28f, 0.0f);
+        result.specularAmount = 0.36f;
         result.emissiveStrength = 0.7f;
         return result;
     case ReplacementMaterialClass::Turbo:
         result = Make(materialClass, "Turbo", "#00fff0",
                       "turbo_base.png", 0.3f, 0.18f);
+        result.specularAmount = 0.52f;
+        result.clearcoatAmount = 0.2f;
+        result.clearcoatRoughness = 0.3f;
         result.emissiveStrength = 0.55f;
         return result;
     case ReplacementMaterialClass::Checkpoint:
         result = Make(materialClass, "Checkpoint", "#168bd2",
                       "checkpoint_base.png", 0.4f, 0.08f);
+        result.specularAmount = 0.48f;
+        result.clearcoatAmount = 0.15f;
+        result.clearcoatRoughness = 0.36f;
         result.emissiveStrength = 0.22f;
         return result;
     case ReplacementMaterialClass::StartFinish:
-        return Make(materialClass, "Start / finish", "#f3f4ef",
-                    "start_finish_base.png", 0.52f, 0.05f);
+        result = Make(materialClass, "Start / finish", "#f3f4ef",
+                      "start_finish_base.png", 0.52f, 0.05f);
+        result.specularAmount = 0.42f;
+        result.clearcoatAmount = 0.1f;
+        result.clearcoatRoughness = 0.4f;
+        return result;
     case ReplacementMaterialClass::Water:
-        return Make(materialClass, "Water", "#267cff",
-                    "water_base.png", 0.18f, 0.0f);
+        result = Make(materialClass, "Water", "#267cff",
+                      "water_base.png", 0.18f, 0.0f);
+        result.specularAmount = 1.0f;
+        result.transmissionFactor = 0.78f;
+        result.indexOfRefraction = 1.333f;
+        return result;
     case ReplacementMaterialClass::Neutral:
         result = Make(materialClass, "Neutral", "#9ca3a0",
                       "neutral_base.png", 0.72f, 0.0f);
+        result.specularAmount = 0.36f;
         result.applyVertexColors = false;
         return result;
     case ReplacementMaterialClass::Unknown:
     default:
-        return Make(ReplacementMaterialClass::Unknown,
-                    "Unknown", "#ff38df",
-                    "unknown_base.png", 0.7f, 0.0f);
+        result = Make(ReplacementMaterialClass::Unknown,
+                      "Unknown", "#ff38df",
+                      "unknown_base.png", 0.7f, 0.0f);
+        result.specularAmount = 0.4f;
+        return result;
     }
 }
 

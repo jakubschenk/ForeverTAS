@@ -1138,8 +1138,21 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass) {
                MaterialClassName(materialClass));
     map.insert(QStringLiteral("debugColor"), replacement.debugColor);
     map.insert(QStringLiteral("baseTexture"), replacement.baseTexture);
+    map.insert(QStringLiteral("normalTexture"), replacement.normalTexture);
+    map.insert(QStringLiteral("roughnessTexture"),
+               replacement.roughnessTexture);
     map.insert(QStringLiteral("roughness"), replacement.roughness);
     map.insert(QStringLiteral("metalness"), replacement.metalness);
+    map.insert(QStringLiteral("normalStrength"), replacement.normalStrength);
+    map.insert(QStringLiteral("specularAmount"), replacement.specularAmount);
+    map.insert(QStringLiteral("clearcoatAmount"),
+               replacement.clearcoatAmount);
+    map.insert(QStringLiteral("clearcoatRoughness"),
+               replacement.clearcoatRoughness);
+    map.insert(QStringLiteral("transmissionFactor"),
+               replacement.transmissionFactor);
+    map.insert(QStringLiteral("indexOfRefraction"),
+               replacement.indexOfRefraction);
     map.insert(QStringLiteral("emissiveStrength"),
                replacement.emissiveStrength);
     map.insert(QStringLiteral("unknown"),

@@ -577,7 +577,17 @@ ApplicationWindow {
                     property bool freeCamera: false
                     property bool orbitalCamera: false
                     readonly property vector3d sceneCameraPosition:
-                        viewCamera.scenePosition
+                        carCameraActive
+                        ? window.viewer.carCameraPosition
+                        : freeCamera
+                          ? freeCameraPosition
+                          : Qt.vector3d(
+                                cameraTarget.x
+                                    - cameraForward.x * orbitDistance,
+                                cameraTarget.y
+                                    - cameraForward.y * orbitDistance,
+                                cameraTarget.z
+                                    - cameraForward.z * orbitDistance)
                     readonly property var sceneCameraRotation:
                         viewCamera.sceneRotation
                     property vector3d freeCameraPosition:
@@ -588,7 +598,7 @@ ApplicationWindow {
                         const timelineTime = window.viewer.timeMs
                         const selectedCarPosition = window.viewer.carPosition
                         return window.viewer.renderTelemetry(
-                                    script, viewCamera.scenePosition)
+                                    script, sceneCameraPosition)
                     }
                     readonly property bool carCameraActive:
                         !freeCamera && !orbitalCamera && !cuboidFocused
@@ -2117,11 +2127,19 @@ ApplicationWindow {
                             objectName: "mapEnvironment"
                             backgroundMode: SceneEnvironment.SkyBox
                             antialiasingMode: SceneEnvironment.MSAA
-                            antialiasingQuality: SceneEnvironment.Medium
+                            antialiasingQuality: SceneEnvironment.VeryHigh
                             tonemapMode: SceneEnvironment.TonemapModeAces
-                            probeExposure: 1.0
+                            probeExposure: 1.05
                             skyboxBlurAmount: 0.0
                             specularAAEnabled: true
+                            depthPrePassEnabled: true
+                            aoEnabled: true
+                            aoStrength: 52
+                            aoDistance: 4.5
+                            aoSoftness: 32
+                            aoBias: 0.02
+                            aoSampleRate: 4
+                            aoDither: true
 
                             lightProbe: Texture {
                                 objectName: "daySkyTexture"
@@ -2159,7 +2177,8 @@ ApplicationWindow {
                                         : viewport.orbitDistance
                                     readonly property var dynamicClipPlanes:
                                         window.viewer.cameraClipPlanes(
-                                            scenePosition, clipDistance)
+                                            viewport.sceneCameraPosition,
+                                            clipDistance)
 
                                     z: viewport.carCameraActive
                                        || viewport.freeCamera
@@ -2179,9 +2198,15 @@ ApplicationWindow {
                             objectName: "mainMapLight"
                             eulerRotation.x: -52
                             eulerRotation.y: -32
-                            brightness: 1.2
+                            brightness: 1.15
                             color: "#fff3d7"
-                            castsShadow: false
+                            castsShadow: true
+                            shadowMapQuality: Light.ShadowMapQualityVeryHigh
+                            shadowMapFar: Math.max(
+                                180, Math.min(1200, viewCamera.clipFar))
+                            shadowFactor: 72
+                            shadowFilter: 8
+                            shadowBias: 0.02
                         }
 
                         DirectionalLight {
@@ -2213,6 +2238,30 @@ ApplicationWindow {
                                     mipFilter: Texture.Linear
                                 }
 
+                                Texture {
+                                    id: replacementNormalMap
+                                    objectName: "trackVisualNormalTexture"
+                                    source: modelData.normalTexture
+                                    tilingModeHorizontal: Texture.Repeat
+                                    tilingModeVertical: Texture.Repeat
+                                    generateMipmaps: true
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: Texture.Linear
+                                }
+
+                                Texture {
+                                    id: replacementRoughnessMap
+                                    objectName: "trackVisualRoughnessTexture"
+                                    source: modelData.roughnessTexture
+                                    tilingModeHorizontal: Texture.Repeat
+                                    tilingModeVertical: Texture.Repeat
+                                    generateMipmaps: true
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: Texture.Linear
+                                }
+
                                 lighting:
                                     PrincipledMaterial.FragmentLighting
                                 baseColor: window.renderMode ===
@@ -2230,10 +2279,37 @@ ApplicationWindow {
                                            "neutral"
                                            ? 0.74
                                            : modelData.roughness
+                                roughnessMap: window.renderMode === "textured"
+                                              && modelData.roughnessTexture
+                                                      .toString().length > 0
+                                              ? replacementRoughnessMap : null
+                                roughnessChannel: Material.R
                                 metalness: window.renderMode ===
                                            "neutral"
                                            ? 0
                                            : modelData.metalness
+                                normalMap: window.renderMode === "textured"
+                                           && modelData.normalTexture
+                                                   .toString().length > 0
+                                           ? replacementNormalMap : null
+                                normalStrength: window.renderMode ===
+                                                "textured"
+                                                ? modelData.normalStrength : 0
+                                specularAmount: window.renderMode ===
+                                                "neutral"
+                                                ? 0.5
+                                                : modelData.specularAmount
+                                clearcoatAmount: window.renderMode ===
+                                                 "textured"
+                                                 ? modelData.clearcoatAmount : 0
+                                clearcoatRoughnessAmount:
+                                    modelData.clearcoatRoughness
+                                transmissionFactor: window.renderMode ===
+                                                    "textured"
+                                                    ? modelData
+                                                          .transmissionFactor
+                                                    : 0
+                                indexOfRefraction: modelData.indexOfRefraction
                                 cullMode: Material.NoCulling
                                 vertexColorsEnabled:
                                     modelData.vertexColors
@@ -2273,7 +2349,11 @@ ApplicationWindow {
                                          && window.renderMode === "textured"
                                          && modelData.defaultVisible
                                 geometry: modelData.geometry
-                                castsShadows: false
+                                castsShadows: modelData.materialClass !==
+                                              "Glass"
+                                              && modelData.materialClass !==
+                                                 "Water"
+                                receivesShadows: true
 
                                 materials: sharedMaterial
                                            ? [sharedMaterial] : []
@@ -2392,12 +2472,17 @@ ApplicationWindow {
                                                     window.viewer
                                                         .ellipsoidFilledGeometries
                                                         .length]
-                                            materials: DefaultMaterial {
+                                            castsShadows: true
+                                            receivesShadows: true
+                                            materials: PrincipledMaterial {
                                                 objectName: "runCarFilledMaterial"
-                                                lighting:
-                                                    DefaultMaterial.NoLighting
                                                 vertexColorsEnabled: true
-                                                diffuseColor: "white"
+                                                baseColor: "white"
+                                                roughness: 0.3
+                                                metalness: 0.48
+                                                specularAmount: 1.0
+                                                clearcoatAmount: 0.42
+                                                clearcoatRoughnessAmount: 0.16
                                                 cullMode:
                                                     Material.BackFaceCulling
                                             }
@@ -2452,11 +2537,16 @@ ApplicationWindow {
                                                  "wireframe"
                                         geometry: window.viewer
                                             .selectedEllipsoidFilledGeometry
-                                        materials: DefaultMaterial {
-                                            lighting:
-                                                DefaultMaterial.NoLighting
+                                        castsShadows: true
+                                        receivesShadows: true
+                                        materials: PrincipledMaterial {
                                             vertexColorsEnabled: true
-                                            diffuseColor: "white"
+                                            baseColor: "white"
+                                            roughness: 0.3
+                                            metalness: 0.48
+                                            specularAmount: 1.0
+                                            clearcoatAmount: 0.42
+                                            clearcoatRoughnessAmount: 0.16
                                             cullMode:
                                                 Material.BackFaceCulling
                                         }
@@ -2492,7 +2582,7 @@ ApplicationWindow {
                         active: window.rayTracingEnabled
                                 && window.viewer.loaded
                         viewer: window.viewer
-                        cameraPosition: viewCamera.scenePosition
+                        cameraPosition: viewport.sceneCameraPosition
                         cameraTarget: viewport.cameraTarget
                         cameraUp: viewCamera.up
                         fieldOfView: viewCamera.fieldOfView

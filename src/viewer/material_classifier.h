@@ -37,8 +37,16 @@ struct ReplacementMaterial {
     QString name;
     QColor debugColor;
     QString baseTexture;
+    QString normalTexture;
+    QString roughnessTexture;
     float roughness = 0.7f;
     float metalness = 0.0f;
+    float normalStrength = 0.0f;
+    float specularAmount = 0.5f;
+    float clearcoatAmount = 0.0f;
+    float clearcoatRoughness = 0.0f;
+    float transmissionFactor = 0.0f;
+    float indexOfRefraction = 1.5f;
     float worldUvScale = 0.0f;
     float emissiveStrength = 0.0f;
     bool applyVertexColors = true;
