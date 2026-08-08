@@ -65,13 +65,18 @@ QVector3D TransformDirection(const PhysicsSandboxTransform &transform,
            ToQt(transform.basisZ) * direction.z();
 }
 
+float TransformDeterminant(const PhysicsSandboxTransform &transform) {
+    return QVector3D::dotProduct(
+            ToQt(transform.basisX),
+            QVector3D::crossProduct(ToQt(transform.basisY),
+                                    ToQt(transform.basisZ)));
+}
+
 QVector3D TransformNormal(const PhysicsSandboxTransform &transform,
-                          const QVector3D &normal) {
+                          const QVector3D &normal, float determinant) {
     const QVector3D x = ToQt(transform.basisX);
     const QVector3D y = ToQt(transform.basisY);
     const QVector3D z = ToQt(transform.basisZ);
-    const float determinant =
-            QVector3D::dotProduct(x, QVector3D::crossProduct(y, z));
     QVector3D result;
     if (std::fabs(determinant) > 1.0e-12f) {
         result = (QVector3D::crossProduct(y, z) * normal.x() +
@@ -261,8 +266,9 @@ WorldBounds TransformBounds(const PhysicsSandboxRenderMesh &mesh,
     return result;
 }
 
-bool HasKnownAlphaMode(StaticVisualAlphaMode alphaMode) {
-    return alphaMode != StaticVisualAlphaMode::Unknown;
+bool ShouldSpatiallyPartition(StaticVisualAlphaMode alphaMode) {
+    return alphaMode == StaticVisualAlphaMode::Opaque ||
+           alphaMode == StaticVisualAlphaMode::Masked;
 }
 
 std::optional<std::int64_t> CellCoordinate(double worldCoordinate,
@@ -292,7 +298,7 @@ struct SpatialCell {
 std::optional<SpatialCell> SelectSpatialCell(const WorldBounds &bounds,
                                              float cellSize,
                                              StaticVisualAlphaMode alphaMode) {
-    if (!HasKnownAlphaMode(alphaMode)) {
+    if (!ShouldSpatiallyPartition(alphaMode)) {
         return std::nullopt;
     }
     const double centerX =
@@ -317,7 +323,7 @@ StaticVisualMaterialState MaterialStateFor(
                    : StaticVisualMaterialState{};
 }
 
-bool UsesRandomizedTerrainTiles(
+[[maybe_unused]] bool UsesRandomizedTerrainTiles(
         ReplacementMaterialClass materialClass,
         PhysicsSandboxScenePurpose purpose) {
     if (materialClass != ReplacementMaterialClass::Grass &&
@@ -528,7 +534,7 @@ void ApplyUvRotation(VisualVertex &vertex, float u, float v,
     }
 }
 
-void ApplyWorldUvProjection(VisualVertex &vertex,
+[[maybe_unused]] void ApplyWorldUvProjection(VisualVertex &vertex,
                             const QVector3D &position,
                             const QVector3D &normal,
                             float scale,
@@ -809,14 +815,17 @@ void FlattenAxisAlignedNormal(std::vector<VisualVertex> &polygon,
 }
 
 VisualVertex TransformVertex(const VisualVertex &source,
-                             const PhysicsSandboxTransform &transform) {
+                             const PhysicsSandboxTransform &transform,
+                             float determinant) {
     VisualVertex vertex = source;
     const QVector3D position = TransformPoint(
             transform,
             {source.position[0], source.position[1], source.position[2]});
     const QVector3D normal =
-            TransformNormal(transform, {source.normal[0], source.normal[1],
-                                        source.normal[2]});
+            TransformNormal(transform,
+                            {source.normal[0], source.normal[1],
+                             source.normal[2]},
+                            determinant);
     QVector3D tangent = TransformDirection(
             transform,
             {source.tangent[0], source.tangent[1], source.tangent[2]});
@@ -905,8 +914,10 @@ void AppendInstance(BatchAccumulator &batch,
     }
     const std::uint32_t baseVertex =
             static_cast<std::uint32_t>(batch.vertices.size());
+    const float transformDeterminant = TransformDeterminant(transform);
     for (const VisualVertex &source : sourceVertices) {
-        VisualVertex vertex = TransformVertex(source, transform);
+        VisualVertex vertex =
+                TransformVertex(source, transform, transformDeterminant);
         const QVector3D position(vertex.position[0], vertex.position[1],
                                  vertex.position[2]);
         const QVector3D normal(vertex.normal[0], vertex.normal[1],
@@ -914,8 +925,12 @@ void AppendInstance(BatchAccumulator &batch,
         QVector3D tangent(vertex.tangent[0], vertex.tangent[1],
                           vertex.tangent[2]);
         if (worldUvScale > 0.0f) {
-            ApplyWorldUvProjection(vertex, position, normal, worldUvScale,
-                                   tangent);
+            // This is the precise legacy PDiff mapping used by the game and
+            // gbx3d: world.xz / 16. It is deliberately not a dominant-axis
+            // triplanar projection and does not randomize individual tiles.
+            vertex.uv0[0] = position.x() * worldUvScale;
+            vertex.uv0[1] = position.z() * worldUvScale;
+            tangent = QVector3D(1.0f, 0.0f, 0.0f);
         }
         tangent -= normal * QVector3D::dotProduct(normal, tangent);
         tangent = tangent.lengthSquared() > 1.0e-12f
@@ -926,13 +941,22 @@ void AppendInstance(BatchAccumulator &batch,
         vertex.tangent[2] = tangent.z();
         AppendVertex(batch, vertex);
     }
-    for (std::uint32_t index : sourceIndices) {
-        batch.indices.push_back(baseVertex + index);
+    const bool reverseWinding = transformDeterminant < 0.0f;
+    if (reverseWinding && sourceIndices.size() % 3u == 0u) {
+        for (std::size_t index = 0u; index < sourceIndices.size(); index += 3u) {
+            batch.indices.push_back(baseVertex + sourceIndices[index]);
+            batch.indices.push_back(baseVertex + sourceIndices[index + 2u]);
+            batch.indices.push_back(baseVertex + sourceIndices[index + 1u]);
+        }
+    } else {
+        for (std::uint32_t index : sourceIndices) {
+            batch.indices.push_back(baseVertex + index);
+        }
     }
     ++batch.sourceInstanceCount;
 }
 
-void AppendRandomizedTiledInstance(
+[[maybe_unused]] void AppendRandomizedTiledInstance(
         BatchAccumulator &batch,
         const std::vector<VisualVertex> &sourceVertices,
         const std::vector<std::uint32_t> &sourceIndices,
@@ -940,8 +964,10 @@ void AppendRandomizedTiledInstance(
         TerrainCoverage *coverage) {
     std::vector<VisualVertex> vertices;
     vertices.reserve(sourceVertices.size());
+    const float transformDeterminant = TransformDeterminant(transform);
     for (const VisualVertex &source : sourceVertices) {
-        vertices.push_back(TransformVertex(source, transform));
+        vertices.push_back(
+                TransformVertex(source, transform, transformDeterminant));
     }
     // Only earlier instances cover this one. Triangles within one authored
     // mesh retain their original topology until the whole instance is done.
@@ -1170,7 +1196,6 @@ StaticVisualBatchResult BuildStaticVisualBatches(
             scene.meshes.size());
 
     std::map<BatchKey, BatchAccumulator> accumulators;
-    std::map<BatchKey, TerrainCoverage> terrainCoverage;
     std::set<DuplicateInstanceKey> seenInstances;
     bool hasDefaultBounds = false;
     for (const PhysicsSandboxRenderInstance &instance : scene.instances) {
@@ -1228,7 +1253,6 @@ StaticVisualBatchResult BuildStaticVisualBatches(
                 IsGrassGroundCover(mesh, instance)};
         const ReplacementMaterialClass materialClass = ClassifyMaterial(
                 scene.materials[instance.materialIndex], context);
-        const ReplacementMaterial replacement = ReplacementFor(materialClass);
         result.telemetry.materialClassificationNanoseconds +=
                 ElapsedNanoseconds(classificationStarted, BuildClock::now());
         const bool defaultVisible = IsDefaultVisualInstance(
@@ -1245,19 +1269,9 @@ StaticVisualBatchResult BuildStaticVisualBatches(
         if (!preparedMesh.has_value()) {
             preparedMesh.emplace(PrepareMesh(mesh));
         }
-        if (UsesRandomizedTerrainTiles(materialClass, instance.purpose)) {
-            AppendRandomizedTiledInstance(
-                    accumulators[key], *preparedMesh,
-                    mesh.indices, instance.worldTransform,
-                    replacement.worldUvScale,
-                    instance.purpose == PhysicsSandboxScenePurpose::Clip
-                            ? &terrainCoverage[key]
-                            : nullptr);
-        } else {
-            AppendInstance(accumulators[key],
-                           *preparedMesh, mesh.indices,
-                           instance.worldTransform, replacement.worldUvScale);
-        }
+        AppendInstance(accumulators[key], *preparedMesh, mesh.indices,
+                       instance.worldTransform,
+                       materialState.worldXz ? (1.0f / 16.0f) : 0.0f);
         result.telemetry.geometryBuildNanoseconds +=
                 ElapsedNanoseconds(geometryStarted, BuildClock::now());
 

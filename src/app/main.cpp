@@ -2,6 +2,7 @@
 #include "app/input_preview_binding.h"
 #include "viewer/race_timeline_item.h"
 #include "viewer/race_viewer_controller.h"
+#include "viewer/graphics_settings.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -25,6 +26,7 @@ int main(int argc, char **argv) {
 
     forevertas::app::SearchController controller;
     forevertas::viewer::RaceViewerController viewer;
+    forevertas::viewer::GraphicsSettings graphicsSettings;
     forevertas::app::BindInputPreview(controller, viewer);
     QObject::connect(
             &controller,
@@ -56,7 +58,9 @@ int main(int argc, char **argv) {
             {QStringLiteral("controller"),
              QVariant::fromValue(static_cast<QObject *>(&controller))},
             {QStringLiteral("viewer"),
-             QVariant::fromValue(static_cast<QObject *>(&viewer))}});
+             QVariant::fromValue(static_cast<QObject *>(&viewer))},
+            {QStringLiteral("graphicsSettings"),
+             QVariant::fromValue(static_cast<QObject *>(&graphicsSettings))}});
     QObject::connect(
             &engine,
             &QQmlApplicationEngine::objectCreationFailed,

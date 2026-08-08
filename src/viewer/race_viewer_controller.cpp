@@ -5,6 +5,7 @@
 #include "replay_file_io.h"
 #include "time_format.h"
 #include "viewer/material_classifier.h"
+#include "viewer/native_material_loader.h"
 
 #include <forevervalidator/camera.h>
 #include <forevervalidator/experimental/physics_sandbox.h>
@@ -1147,6 +1148,63 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass) {
     return map;
 }
 
+QVariantMap MaterialMap(ReplacementMaterialClass materialClass,
+                        std::uint32_t sourceMaterialIndex,
+                        const NativeMaterialRuntime *native) {
+    QVariantMap map = MaterialMap(materialClass);
+    map.insert(QStringLiteral("sourceMaterialIndex"),
+               static_cast<qint64>(sourceMaterialIndex));
+    map.insert(QStringLiteral("normalTexture"), QUrl{});
+    map.insert(QStringLiteral("specularTexture"), QUrl{});
+    map.insert(QStringLiteral("albedoGenerateMipmaps"), true);
+    map.insert(QStringLiteral("normalGenerateMipmaps"), true);
+    map.insert(QStringLiteral("specularGenerateMipmaps"), true);
+    map.insert(QStringLiteral("nativeAlbedo"), false);
+    map.insert(QStringLiteral("nativeNormal"), false);
+    map.insert(QStringLiteral("nativeSpecular"), false);
+    map.insert(QStringLiteral("alphaMode"), QStringLiteral("unknown"));
+    map.insert(QStringLiteral("opacity"), 1.0);
+    map.insert(QStringLiteral("doubleSided"), true);
+    map.insert(QStringLiteral("unlit"), false);
+    map.insert(QStringLiteral("materialVisible"), true);
+    map.insert(QStringLiteral("repeat"), true);
+    map.insert(QStringLiteral("flipV"), false);
+    map.insert(QStringLiteral("sourcePath"), QString{});
+    map.insert(QStringLiteral("diagnostic"), QString{});
+    if (native == nullptr) return map;
+
+    if (native->albedoTexture.isValid()) {
+        map.insert(QStringLiteral("baseTexture"), native->albedoTexture);
+    }
+    map.insert(QStringLiteral("normalTexture"), native->normalTexture);
+    map.insert(QStringLiteral("specularTexture"), native->specularTexture);
+    // The replacement texture remains bound when the native albedo cannot be
+    // resolved. Keep mip generation enabled for that fallback instead of
+    // inheriting the empty native runtime's default false value.
+    map.insert(QStringLiteral("albedoGenerateMipmaps"),
+               native->nativeAlbedo ? native->albedoGenerateMipmaps : true);
+    map.insert(QStringLiteral("normalGenerateMipmaps"),
+               native->normalGenerateMipmaps);
+    map.insert(QStringLiteral("specularGenerateMipmaps"),
+               native->specularGenerateMipmaps);
+    map.insert(QStringLiteral("nativeAlbedo"), native->nativeAlbedo);
+    map.insert(QStringLiteral("nativeNormal"), native->nativeNormal);
+    map.insert(QStringLiteral("nativeSpecular"), native->nativeSpecular);
+    map.insert(QStringLiteral("alphaMode"),
+               StaticVisualAlphaModeName(
+                       native->profile.renderState.alphaMode));
+    map.insert(QStringLiteral("opacity"), native->profile.opacity);
+    map.insert(QStringLiteral("doubleSided"),
+               native->profile.renderState.doubleSided);
+    map.insert(QStringLiteral("unlit"), native->profile.unlit);
+    map.insert(QStringLiteral("materialVisible"), native->profile.visible);
+    map.insert(QStringLiteral("repeat"), native->profile.repeat);
+    map.insert(QStringLiteral("flipV"), native->profile.flipV);
+    map.insert(QStringLiteral("sourcePath"), native->albedoSourcePath);
+    map.insert(QStringLiteral("diagnostic"), native->diagnostic);
+    return map;
+}
+
 std::vector<ViewerTriangle> UnitEllipsoidTriangles() {
     constexpr unsigned Latitudes = 12u;
     constexpr unsigned Longitudes = 20u;
@@ -1252,15 +1310,29 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
         result.track = BuildMeshBuffers(triangles, -1);
         result.triangleCount = static_cast<qint64>(triangles.size());
 
+        const std::vector<NativeMaterialProfile> nativeProfiles =
+                ResolveNativeMaterialProfiles(*renderScene);
+        const std::vector<bool> nativeMaterialLoadMask =
+                SelectDefaultNativeMaterialLoadMask(*renderScene,
+                                                    nativeProfiles);
+        NativeMaterialLoadResult nativeMaterials = LoadNativeMaterials(
+                *renderScene, nativeProfiles, nativeMaterialLoadMask,
+                packsDirectory);
+        StaticVisualBatchOptions batchOptions;
+        batchOptions.materialStates = nativeMaterials.renderStates;
         StaticVisualBatchResult batches =
-                BuildStaticVisualBatches(*renderScene);
+                BuildStaticVisualBatches(*renderScene, batchOptions);
+#if FOREVERTAS_GPU_RAY_TRACING
         result.rayTracingScene = BuildRayTracingScene(batches.batches);
+#endif
         result.materialCount =
                 static_cast<qint64>(renderScene->materials.size());
         result.diagnosticCount +=
                 static_cast<qint64>(renderScene->diagnostics.size()) +
                 static_cast<qint64>(batches.invalidInstanceCount) +
-                static_cast<qint64>(batches.duplicateInstanceCount);
+                static_cast<qint64>(batches.duplicateInstanceCount) +
+                static_cast<qint64>(
+                        nativeMaterials.telemetry.failedTextureCount);
         result.sourceVisualObjectCount =
                 static_cast<qint64>(batches.defaultVisibleInstanceCount);
         result.sourceVisualMeshCount =
@@ -1273,8 +1345,7 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
         result.visualBoundsMax = batches.defaultBoundsMax;
 
         struct MaterialBindingKey {
-            ReplacementMaterialClass materialClass =
-                    ReplacementMaterialClass::Unknown;
+            std::uint32_t sourceMaterialIndex = 0u;
             bool vertexColors = false;
         };
         std::vector<MaterialBindingKey> materialBindings;
@@ -1291,15 +1362,24 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                  ++materialBindingIndex) {
                 const MaterialBindingKey &binding =
                         materialBindings[materialBindingIndex];
-                if (binding.materialClass == batch.materialClass &&
+                if (binding.sourceMaterialIndex ==
+                            batch.sourceMaterialIndex &&
                     binding.vertexColors == applyVertexColors) {
                     break;
                 }
             }
             if (materialBindingIndex == materialBindings.size()) {
                 materialBindings.push_back(
-                        {batch.materialClass, applyVertexColors});
-                QVariantMap binding = MaterialMap(batch.materialClass);
+                        {batch.sourceMaterialIndex, applyVertexColors});
+                const NativeMaterialRuntime *native =
+                        batch.sourceMaterialIndex <
+                                        nativeMaterials.materials.size()
+                                ? &nativeMaterials.materials[
+                                          batch.sourceMaterialIndex]
+                                : nullptr;
+                QVariantMap binding = MaterialMap(
+                        batch.materialClass, batch.sourceMaterialIndex,
+                        native);
                 binding.insert(QStringLiteral("vertexColors"),
                                applyVertexColors);
                 if (batch.materialClass == ReplacementMaterialClass::Unknown) {
@@ -1317,12 +1397,88 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                         MaterialClassName(batch.materialClass));
             item.insert(QStringLiteral("defaultVisible"),
                         batch.defaultVisible);
+            item.insert(QStringLiteral("materialVisible"),
+                        batch.sourceMaterialIndex <
+                                        nativeMaterials.materials.size()
+                                ? nativeMaterials.materials[
+                                          batch.sourceMaterialIndex]
+                                          .profile.visible
+                                : true);
+            item.insert(QStringLiteral("alphaMode"),
+                        StaticVisualAlphaModeName(batch.alphaMode));
+            item.insert(QStringLiteral("doubleSided"), batch.doubleSided);
+            item.insert(QStringLiteral("spatiallyPartitioned"),
+                        batch.spatiallyPartitioned);
+            item.insert(QStringLiteral("cellX"), batch.cellX);
+            item.insert(QStringLiteral("cellZ"), batch.cellZ);
             item.insert(QStringLiteral("sourceInstanceCount"),
                         static_cast<qint64>(batch.sourceInstanceCount));
             item.insert(QStringLiteral("triangleCount"),
                         static_cast<qint64>(batch.triangleCount));
             result.visualBatchItems.push_back(std::move(item));
         }
+        result.renderTelemetry = {
+                {QStringLiteral("referencedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .referencedTextureCount)},
+                {QStringLiteral("resolvedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .resolvedTextureCount)},
+                {QStringLiteral("failedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .failedTextureCount)},
+                {QStringLiteral("textureCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry.cacheHitCount)},
+                {QStringLiteral("textureMemoryCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .memoryCacheHitCount)},
+                {QStringLiteral("textureDiskCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .diskCacheHitCount)},
+                {QStringLiteral("nativeMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .nativeMaterialCount)},
+                {QStringLiteral("fallbackMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .fallbackMaterialCount)},
+                {QStringLiteral("worldProjectedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .worldProjectedMaterialCount)},
+                {QStringLiteral("maskedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .maskedMaterialCount)},
+                {QStringLiteral("blendedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .blendedMaterialCount)},
+                {QStringLiteral("additiveMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .additiveMaterialCount)},
+                {QStringLiteral("subtractiveMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .subtractiveMaterialCount)},
+                {QStringLiteral("doubleSidedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .doubleSidedMaterialCount)},
+                {QStringLiteral("unlitMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .unlitMaterialCount)},
+                {QStringLiteral("estimatedTextureMiB"),
+                 static_cast<double>(nativeMaterials.telemetry
+                                             .estimatedGpuByteCount) /
+                         (1024.0 * 1024.0)},
+                {QStringLiteral("textureLoadMs"),
+                 static_cast<double>(nativeMaterials.telemetry
+                                             .loadNanoseconds) /
+                         1000000.0},
+                {QStringLiteral("sceneBuildMs"),
+                 static_cast<double>(batches.telemetry.totalBuildNanoseconds) /
+                         1000000.0},
+                {QStringLiteral("submittedBatches"),
+                 static_cast<qint64>(
+                         batches.telemetry.submittedBatchCount)},
+                {QStringLiteral("spatialCells"),
+                 static_cast<qint64>(
+                         batches.telemetry.populatedSpatialCellCount)}};
         if (result.sourceVisualObjectCount == 0) {
             result.visualBoundsMin = result.track.boundsMin;
             result.visualBoundsMax = result.track.boundsMax;
@@ -2247,6 +2403,10 @@ qint64 RaceViewerController::materialCount() const {
 
 qint64 RaceViewerController::diagnosticCount() const {
     return diagnosticCount_;
+}
+
+QVariantMap RaceViewerController::rendererTelemetry() const {
+    return renderTelemetry_;
 }
 
 qint64 RaceViewerController::ellipsoidCount() const {
@@ -4118,6 +4278,7 @@ void RaceViewerController::applyLoadResult(
     visualGeometries_ = std::move(visualGeometries);
     rayTracingScene_ = std::move(result.rayTracingScene);
     visualMaterials_ = std::move(result.visualMaterials);
+    renderTelemetry_ = std::move(result.renderTelemetry);
     visualBatches_ = std::move(visualBatches);
     carEllipsoids_ = std::move(result.carEllipsoids);
     triangleCount_ = result.triangleCount;

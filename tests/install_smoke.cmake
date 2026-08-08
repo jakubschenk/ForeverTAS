@@ -48,9 +48,18 @@ foreach(required_file IN ITEMS "${executable}" "${debug_worker}" "${license}")
     endif()
 endforeach()
 
+if(WIN32)
+    # windeployqt deploys the production qwindows platform plugin, not the
+    # development-only offscreen plugin. Exercise the same platform that the
+    # portable package uses so this validates the deployed runtime closure.
+    set(smoke_platform windows)
+else()
+    set(smoke_platform offscreen)
+endif()
+
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
-        QT_QPA_PLATFORM=offscreen
+        QT_QPA_PLATFORM=${smoke_platform}
         QSG_RHI_BACKEND=software
         "${executable}" --qml-smoke-test
     RESULT_VARIABLE smoke_result
