@@ -25,7 +25,10 @@ using forevertas::viewer::ClassifyMaterial;
 using forevertas::viewer::MaterialSemanticContext;
 using forevertas::viewer::ReplacementFor;
 using forevertas::viewer::ReplacementMaterialClass;
+using forevertas::viewer::StaticVisualAlphaMode;
 using forevertas::viewer::StaticVisualBatch;
+using forevertas::viewer::StaticVisualBatchOptions;
+using forevertas::viewer::StaticVisualMaterialState;
 using forevervalidator::experimental::PhysicsSandboxRenderInstance;
 using forevervalidator::experimental::PhysicsSandboxRenderLayer;
 using forevervalidator::experimental::PhysicsSandboxRenderMaterial;
@@ -688,6 +691,139 @@ bool TestStaticBatching() {
     return okay;
 }
 
+bool TestSpatialBatchingAndTelemetry() {
+    PhysicsSandboxRenderScene scene;
+    scene.meshes.push_back(TriangleMesh());
+    for (std::uint32_t materialIndex = 0u; materialIndex < 4u;
+         ++materialIndex) {
+        PhysicsSandboxRenderMaterial material;
+        material.id = 100u + materialIndex;
+        material.surfaceMaterialId = 0u;
+        scene.materials.push_back(std::move(material));
+    }
+
+    const auto addInstance = [&scene](std::uint32_t materialIndex, float x,
+                                      float z) {
+        PhysicsSandboxRenderInstance instance;
+        instance.meshIndex = 0u;
+        instance.materialIndex = materialIndex;
+        instance.purpose = PhysicsSandboxScenePurpose::PlacedBlock;
+        instance.worldTransform.translation = {x, 0.0f, z};
+        scene.instances.push_back(std::move(instance));
+    };
+
+    addInstance(0u, 0.0f, 0.0f);
+    addInstance(0u, 127.0f, 0.0f);
+    addInstance(0u, 128.0f, 0.0f);
+    addInstance(0u, -2.0f, 0.0f);
+    addInstance(1u, 0.0f, 0.0f);
+    addInstance(2u, 130.0f, 260.0f);
+    addInstance(2u, 190.0f, 300.0f);
+    addInstance(3u, 0.0f, 130.0f);
+    addInstance(3u, 500.0f, 130.0f);
+
+    StaticVisualBatchOptions options;
+    options.materialStates = {
+            {StaticVisualAlphaMode::Opaque, false},
+            {StaticVisualAlphaMode::Masked, false},
+            {StaticVisualAlphaMode::Blended, true},
+    };
+
+    const auto result =
+            forevertas::viewer::BuildStaticVisualBatches(scene, options);
+    const auto repeat =
+            forevertas::viewer::BuildStaticVisualBatches(scene, options);
+    const auto legacy =
+            forevertas::viewer::BuildStaticVisualBatches(scene);
+
+    const auto findBatch = [&result](std::uint32_t sourceMaterialIndex,
+                                     bool spatiallyPartitioned,
+                                     std::int64_t cellX,
+                                     std::int64_t cellZ) {
+        return std::find_if(
+                result.batches.cbegin(), result.batches.cend(),
+                [=](const StaticVisualBatch &batch) {
+                    return batch.sourceMaterialIndex == sourceMaterialIndex &&
+                           batch.spatiallyPartitioned ==
+                                   spatiallyPartitioned &&
+                           batch.cellX == cellX && batch.cellZ == cellZ;
+                });
+    };
+
+    const auto opaqueCell = findBatch(0u, true, 0, 0);
+    const auto maskedCell = findBatch(1u, true, 0, 0);
+    const auto blendedCell = findBatch(2u, true, 1, 2);
+    const auto unknownBatch = findBatch(3u, false, 0, 0);
+
+    bool okay = Check(
+            result.batches.size() == 6u &&
+                    result.telemetry.acceptedSourceTriangleCount == 9u &&
+                    result.telemetry.submittedTriangleCount == 9u &&
+                    result.telemetry.submittedBatchCount == 6u &&
+                    result.telemetry.submittedMaterialCount == 4u &&
+                    result.telemetry.populatedSpatialCellCount == 4u &&
+                    result.telemetry.spatialBatchCount == 5u &&
+                    result.telemetry.unpartitionedBatchCount == 1u &&
+                    result.telemetry.spatiallyPartitionedInstanceCount == 7u &&
+                    result.telemetry.unknownAlphaInstanceCount == 2u,
+            "spatial batching telemetry did not describe submitted geometry");
+    okay &= Check(
+            opaqueCell != result.batches.cend() &&
+                    opaqueCell->alphaMode == StaticVisualAlphaMode::Opaque &&
+                    !opaqueCell->doubleSided &&
+                    opaqueCell->sourceInstanceCount == 2u &&
+                    opaqueCell->triangleCount == 2u &&
+                    maskedCell != result.batches.cend() &&
+                    maskedCell->alphaMode == StaticVisualAlphaMode::Masked &&
+                    blendedCell != result.batches.cend() &&
+                    blendedCell->alphaMode ==
+                            StaticVisualAlphaMode::Blended &&
+                    blendedCell->doubleSided &&
+                    blendedCell->sourceInstanceCount == 2u &&
+                    unknownBatch != result.batches.cend() &&
+                    unknownBatch->alphaMode ==
+                            StaticVisualAlphaMode::Unknown &&
+                    unknownBatch->sourceInstanceCount == 2u,
+            "source material or render state collapsed across spatial batches");
+    okay &= Check(
+            repeat.telemetry.acceptedSourceTriangleCount ==
+                            result.telemetry.acceptedSourceTriangleCount &&
+                    repeat.telemetry.submittedTriangleCount ==
+                            result.telemetry.submittedTriangleCount &&
+                    repeat.telemetry.submittedBatchCount ==
+                            result.telemetry.submittedBatchCount &&
+                    repeat.telemetry.submittedMaterialCount ==
+                            result.telemetry.submittedMaterialCount &&
+                    repeat.telemetry.populatedSpatialCellCount ==
+                            result.telemetry.populatedSpatialCellCount &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry
+                                    .materialClassificationNanoseconds &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry.geometryBuildNanoseconds &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry.finalizationNanoseconds,
+            "pipeline counters were nondeterministic or stage timings invalid");
+    okay &= Check(
+            legacy.batches.size() == 4u &&
+                    legacy.telemetry.submittedMaterialCount == 4u &&
+                    legacy.telemetry.submittedTriangleCount == 9u &&
+                    legacy.telemetry.populatedSpatialCellCount == 0u &&
+                    legacy.telemetry.spatialBatchCount == 0u &&
+                    legacy.telemetry.unpartitionedBatchCount == 4u &&
+                    legacy.telemetry.unknownAlphaInstanceCount == 9u &&
+                    std::all_of(legacy.batches.cbegin(),
+                                legacy.batches.cend(),
+                                [](const StaticVisualBatch &batch) {
+                                    return !batch.spatiallyPartitioned &&
+                                           batch.alphaMode ==
+                                                   StaticVisualAlphaMode::
+                                                           Unknown;
+                                }),
+            "one-argument pipeline compatibility guessed material semantics");
+    return okay;
+}
+
 bool TestLargeEnvironmentGrassDoesNotTessellate() {
     constexpr float MinimumX = -20739.1f;
     constexpr float MaximumX = 23353.9f;
@@ -900,6 +1036,7 @@ int main(int argc, char **argv) {
     okay &= TestReplacementParametersAndTextures();
     okay &= TestClipPlanesAndPurposeFiltering();
     okay &= TestStaticBatching();
+    okay &= TestSpatialBatchingAndTelemetry();
     okay &= TestLargeEnvironmentGrassDoesNotTessellate();
     okay &= TestIndexedGeometry();
     okay &= TestRayTracingShaders();
