@@ -412,6 +412,30 @@ int main(int argc, char **argv) {
                                     frame.value(QStringLiteral("horizonMs"))
                                             .toLongLong(),
                             "live viewer did not retain the Simulation horizon");
+                    const QVariantList wheelGroundPositions =
+                            frame.value(QStringLiteral("wheelGroundPosition"))
+                                    .toList();
+                    okay &= Check(
+                            frame.contains(QStringLiteral("respawnCount")) &&
+                                    wheelGroundPositions.size() == 4 &&
+                                    wheelGroundPositions.front()
+                                                    .toList()
+                                                    .size() == 3 &&
+                                    frame.value(QStringLiteral("wheelContact"))
+                                                    .toList()
+                                                    .size() == 4 &&
+                                    frame.value(QStringLiteral(
+                                                        "wheelHasSurface"))
+                                                    .toList()
+                                                    .size() == 4 &&
+                                    frame.value(QStringLiteral("wheelSliding"))
+                                                    .toList()
+                                                    .size() == 4 &&
+                                    frame.value(QStringLiteral("wheelSurface"))
+                                                    .toList()
+                                                    .size() == 4,
+                            "native debugger did not publish skidmark wheel "
+                            "state");
                     okay &= Check(
                             model->toggleBreakpoint(
                                     QString::fromLatin1(kRuntimeSource),

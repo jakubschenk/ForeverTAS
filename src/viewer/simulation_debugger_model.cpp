@@ -57,6 +57,16 @@ QVariantList JsonVector(const QJsonValue &value) {
     return result;
 }
 
+QVariantList JsonArrayValues(const QJsonValue &value) {
+    QVariantList result;
+    const QJsonArray array = value.toArray();
+    result.reserve(array.size());
+    for (const QJsonValue &entry : array) {
+        result.push_back(entry.toVariant());
+    }
+    return result;
+}
+
 bool IsExplicitPrintExpression(const QString &expression) {
     QString code = expression;
     bool quoted = false;
@@ -970,6 +980,28 @@ SimulationDebuggerModel::processDebuggerOutput(const QString &output,
                          state.value(QStringLiteral("totalLaps")).toInt());
             frame.insert(QStringLiteral("raceCompleted"),
                          state.value(QStringLiteral("raceCompleted")).toBool());
+            frame.insert(QStringLiteral("respawnCount"),
+                         state.value(QStringLiteral("respawnCount")).toInt());
+            frame.insert(
+                    QStringLiteral("wheelGroundPosition"),
+                    JsonArrayValues(state.value(
+                            QStringLiteral("wheelGroundPosition"))));
+            frame.insert(
+                    QStringLiteral("wheelContact"),
+                    JsonArrayValues(
+                            state.value(QStringLiteral("wheelContact"))));
+            frame.insert(
+                    QStringLiteral("wheelHasSurface"),
+                    JsonArrayValues(state.value(
+                            QStringLiteral("wheelHasSurface"))));
+            frame.insert(
+                    QStringLiteral("wheelSliding"),
+                    JsonArrayValues(
+                            state.value(QStringLiteral("wheelSliding"))));
+            frame.insert(
+                    QStringLiteral("wheelSurface"),
+                    JsonArrayValues(
+                            state.value(QStringLiteral("wheelSurface"))));
             if (state.value(QStringLiteral("finishTimeMs")).isDouble()) {
                 frame.insert(QStringLiteral("finishTimeMs"),
                              static_cast<qint64>(

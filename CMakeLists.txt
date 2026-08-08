@@ -52,9 +52,6 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
 if(UNIX AND NOT APPLE)
     find_package(Qt6 6.5 REQUIRED COMPONENTS DBus)
 endif()
-if(Qt6_VERSION VERSION_GREATER_EQUAL 6.7)
-    find_package(Qt6 QUIET COMPONENTS GuiPrivate ShaderTools)
-endif()
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 endif()
@@ -70,8 +67,8 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 
 FetchContent_Declare(
     ForeverValidator
-    GIT_REPOSITORY https://github.com/Skycrafter-dev/ForeverValidator.git
-    GIT_TAG a370e6cd57e6681cda8ddc4f4ce3a9e0496e65d7
+    GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
+    GIT_TAG fa9f1e9120e162be609cd84a9c0adb3a2c9f8c93
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
@@ -144,14 +141,22 @@ add_library(forevertas_gui STATIC
     src/app/compact_number_format.h
     src/app/system_file_dialog.cpp
     src/app/system_file_dialog.h
-    src/viewer/gpu_ray_tracing_view.cpp
-    src/viewer/gpu_ray_tracing_view.h
     src/viewer/custom_volume_geometry.cpp
     src/viewer/custom_volume_geometry.h
     src/viewer/material_classifier.cpp
     src/viewer/material_classifier.h
+    src/viewer/native_material.cpp
+    src/viewer/native_material.h
+    src/viewer/native_material_loader.cpp
+    src/viewer/native_material_loader.h
+    src/viewer/native_texture_cache.cpp
+    src/viewer/native_texture_cache.h
+    src/viewer/graphics_settings.cpp
+    src/viewer/graphics_settings.h
     src/viewer/race_geometry.cpp
     src/viewer/race_geometry.h
+    src/viewer/skidmark_geometry.cpp
+    src/viewer/skidmark_geometry.h
     src/viewer/ray_tracing_scene.cpp
     src/viewer/ray_tracing_scene.h
     src/viewer/race_timeline_item.cpp
@@ -297,14 +302,8 @@ else()
 endif()
 set_target_properties(forevertas-simulation-debug-worker PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
-if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
-    target_compile_definitions(forevertas_gui PUBLIC
-        FOREVERTAS_GPU_RAY_TRACING=1)
-    target_link_libraries(forevertas_gui PRIVATE Qt6::GuiPrivate)
-else()
-    target_compile_definitions(forevertas_gui PUBLIC
-        FOREVERTAS_GPU_RAY_TRACING=0)
-endif()
+target_compile_definitions(forevertas_gui PUBLIC
+    FOREVERTAS_GPU_RAY_TRACING=0)
 
 qt_add_executable(forevertas
     src/app/main.cpp)
@@ -344,6 +343,7 @@ qt_add_qml_module(forevertas
     QML_FILES
         qml/AppTheme.qml
         qml/Main.qml
+        qml/SkidmarkMaterial.qml
         qml/SimulationDebuggerPanel.qml
         qml/SliderValueField.qml
         qml/ThemedButton.qml
@@ -379,6 +379,19 @@ qt_add_qml_module(forevertas
         qml/settings/Vector3Settings.qml
         qml/settings/VelocityEvaluationSettings.qml
         qml/settings/VolumeEntryEvaluationSettings.qml)
+set_source_files_properties(qml/shaders/skidmark.vert
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/skidmark.vert")
+set_source_files_properties(
+    qml/shaders/skidmark.frag
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/skidmark.frag")
+set(FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX
+    "/qt/qml/ForeverTAS/qml")
+set(FOREVERTAS_SKIDMARK_SHADER_FILES
+    qml/shaders/skidmark.vert
+    qml/shaders/skidmark.frag)
+qt_add_resources(forevertas "skidmark-shader-sources"
+    PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
+    FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
 file(GLOB FOREVERTAS_REPLACEMENT_TEXTURES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/*.png")
 qt_add_resources(forevertas "replacement-materials"
@@ -391,15 +404,6 @@ qt_add_resources(forevertas "environment-textures"
     PREFIX "/environment"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/environment"
     FILES ${FOREVERTAS_ENVIRONMENT_TEXTURES})
-if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
-    qt_add_shaders(forevertas "ray-tracing-shaders"
-        PREFIX "/raytracing"
-        GLSL "310 es,430"
-        FILES
-            shaders/raytrace.comp
-            shaders/raytrace_present.vert
-            shaders/raytrace_present.frag)
-endif()
 target_link_libraries(forevertas PRIVATE
     forevertas_gui
     Qt6::Gui
@@ -628,6 +632,40 @@ if(BUILD_TESTING)
         forevertas_gui
         Qt6::Gui)
 
+    add_executable(forevertas-graphics-settings-tests
+        tests/graphics_settings_tests.cpp)
+    target_link_libraries(forevertas-graphics-settings-tests PRIVATE
+        forevertas_gui
+        Qt6::Core)
+
+    add_executable(forevertas-skidmark-geometry-tests
+        tests/skidmark_geometry_tests.cpp)
+    target_link_libraries(forevertas-skidmark-geometry-tests PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Quick3D)
+
+    add_executable(forevertas-skidmark-shader-smoke
+        tests/skidmark_shader_smoke.cpp)
+    target_compile_definitions(forevertas-skidmark-shader-smoke PRIVATE
+        FOREVERTAS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(forevertas-skidmark-shader-smoke PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Quick3D)
+    qt_add_resources(forevertas-skidmark-shader-smoke
+        "skidmark-shader-smoke-resources"
+        PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
+        FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
+
+    add_executable(forevertas-native-material-texture-tests
+        tests/native_material_texture_tests.cpp)
+    target_link_libraries(forevertas-native-material-texture-tests PRIVATE
+        forevertas_gui
+        Qt6::Gui)
+
     add_executable(forevertas-whiteboard-tests
         tests/whiteboard_tests.cpp)
     target_compile_definitions(forevertas-whiteboard-tests PRIVATE
@@ -645,6 +683,14 @@ if(BUILD_TESTING)
         target_compile_options(forevertas-controller-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-renderer-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-graphics-settings-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-skidmark-geometry-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-skidmark-shader-smoke PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-native-material-texture-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-whiteboard-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
@@ -670,9 +716,21 @@ if(BUILD_TESTING)
         RESOURCE_LOCK controller-settings)
     add_test(NAME forevertas-renderer
              COMMAND forevertas-renderer-tests)
+    add_test(NAME forevertas-graphics-settings
+             COMMAND forevertas-graphics-settings-tests)
+    add_test(NAME forevertas-skidmark-geometry
+             COMMAND forevertas-skidmark-geometry-tests)
+    if(WIN32)
+        add_test(NAME forevertas-skidmark-shader
+                 COMMAND forevertas-skidmark-shader-smoke)
+    endif()
+    add_test(NAME forevertas-native-material-texture
+             COMMAND forevertas-native-material-texture-tests)
     add_test(NAME forevertas-whiteboard
              COMMAND forevertas-whiteboard-tests)
     set_tests_properties(forevertas-renderer PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(forevertas-skidmark-geometry PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(forevertas-whiteboard PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -917,7 +975,15 @@ if(BUILD_TESTING)
                  COMMAND forevertas-viewer-qml-smoke
                      "${FOREVERTAS_TEST_PACK_DIRECTORY}"
                      "${FOREVERTAS_TEST_REPLAY}")
+        add_test(NAME forevertas-native-renderer-qml
+                 COMMAND forevertas-viewer-qml-smoke
+                     "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                     "${FOREVERTAS_TEST_REPLAY}"
+                     --renderer-only)
         set_tests_properties(forevertas-viewer-qml PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software"
+            TIMEOUT 180)
+        set_tests_properties(forevertas-native-renderer-qml PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software"
             TIMEOUT 180)
     endif()

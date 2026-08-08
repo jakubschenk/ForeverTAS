@@ -5,6 +5,7 @@
 #include "replay_file_io.h"
 #include "time_format.h"
 #include "viewer/material_classifier.h"
+#include "viewer/native_material_loader.h"
 
 #include <forevervalidator/camera.h>
 #include <forevervalidator/experimental/physics_sandbox.h>
@@ -34,6 +35,12 @@ namespace forevertas::viewer {
 namespace {
 
 constexpr auto kTelemetryScriptKey = "viewer/telemetryScript";
+constexpr qint64 kLiveSkidmarkWindowMs = 30000;
+constexpr qint64 kLiveSkidmarkSampleIntervalMs = 20;
+
+qint64 LiveSkidmarkRebuildIntervalMs(qint64 raceTimeMs) {
+    return std::clamp<qint64>(raceTimeMs / 120, 250, 1000);
+}
 
 const QString &DefaultTelemetryScript() {
     static const QString script = QStringLiteral(
@@ -620,6 +627,12 @@ QVector3D ToQt(const forevervalidator::Vector3 &value) {
     return {value.x, value.y, value.z};
 }
 
+std::array<QVector3D, 4u>
+ToQt(const std::array<forevervalidator::Vector3, 4u> &values) {
+    return {ToQt(values[0u]), ToQt(values[1u]), ToQt(values[2u]),
+            ToQt(values[3u])};
+}
+
 std::string VehicleCameraPackName(forevervalidator::VehicleModel model) {
     using forevervalidator::VehicleModel;
     switch (model) {
@@ -1147,6 +1160,63 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass) {
     return map;
 }
 
+QVariantMap MaterialMap(ReplacementMaterialClass materialClass,
+                        std::uint32_t sourceMaterialIndex,
+                        const NativeMaterialRuntime *native) {
+    QVariantMap map = MaterialMap(materialClass);
+    map.insert(QStringLiteral("sourceMaterialIndex"),
+               static_cast<qint64>(sourceMaterialIndex));
+    map.insert(QStringLiteral("normalTexture"), QUrl{});
+    map.insert(QStringLiteral("specularTexture"), QUrl{});
+    map.insert(QStringLiteral("albedoGenerateMipmaps"), true);
+    map.insert(QStringLiteral("normalGenerateMipmaps"), true);
+    map.insert(QStringLiteral("specularGenerateMipmaps"), true);
+    map.insert(QStringLiteral("nativeAlbedo"), false);
+    map.insert(QStringLiteral("nativeNormal"), false);
+    map.insert(QStringLiteral("nativeSpecular"), false);
+    map.insert(QStringLiteral("alphaMode"), QStringLiteral("unknown"));
+    map.insert(QStringLiteral("opacity"), 1.0);
+    map.insert(QStringLiteral("doubleSided"), true);
+    map.insert(QStringLiteral("unlit"), false);
+    map.insert(QStringLiteral("materialVisible"), true);
+    map.insert(QStringLiteral("repeat"), true);
+    map.insert(QStringLiteral("flipV"), false);
+    map.insert(QStringLiteral("sourcePath"), QString{});
+    map.insert(QStringLiteral("diagnostic"), QString{});
+    if (native == nullptr) return map;
+
+    if (native->albedoTexture.isValid()) {
+        map.insert(QStringLiteral("baseTexture"), native->albedoTexture);
+    }
+    map.insert(QStringLiteral("normalTexture"), native->normalTexture);
+    map.insert(QStringLiteral("specularTexture"), native->specularTexture);
+    // The replacement texture remains bound when the native albedo cannot be
+    // resolved. Keep mip generation enabled for that fallback instead of
+    // inheriting the empty native runtime's default false value.
+    map.insert(QStringLiteral("albedoGenerateMipmaps"),
+               native->nativeAlbedo ? native->albedoGenerateMipmaps : true);
+    map.insert(QStringLiteral("normalGenerateMipmaps"),
+               native->normalGenerateMipmaps);
+    map.insert(QStringLiteral("specularGenerateMipmaps"),
+               native->specularGenerateMipmaps);
+    map.insert(QStringLiteral("nativeAlbedo"), native->nativeAlbedo);
+    map.insert(QStringLiteral("nativeNormal"), native->nativeNormal);
+    map.insert(QStringLiteral("nativeSpecular"), native->nativeSpecular);
+    map.insert(QStringLiteral("alphaMode"),
+               StaticVisualAlphaModeName(
+                       native->profile.renderState.alphaMode));
+    map.insert(QStringLiteral("opacity"), native->profile.opacity);
+    map.insert(QStringLiteral("doubleSided"),
+               native->profile.renderState.doubleSided);
+    map.insert(QStringLiteral("unlit"), native->profile.unlit);
+    map.insert(QStringLiteral("materialVisible"), native->profile.visible);
+    map.insert(QStringLiteral("repeat"), native->profile.repeat);
+    map.insert(QStringLiteral("flipV"), native->profile.flipV);
+    map.insert(QStringLiteral("sourcePath"), native->albedoSourcePath);
+    map.insert(QStringLiteral("diagnostic"), native->diagnostic);
+    return map;
+}
+
 std::vector<ViewerTriangle> UnitEllipsoidTriangles() {
     constexpr unsigned Latitudes = 12u;
     constexpr unsigned Longitudes = 20u;
@@ -1252,15 +1322,29 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
         result.track = BuildMeshBuffers(triangles, -1);
         result.triangleCount = static_cast<qint64>(triangles.size());
 
+        const std::vector<NativeMaterialProfile> nativeProfiles =
+                ResolveNativeMaterialProfiles(*renderScene);
+        const std::vector<bool> nativeMaterialLoadMask =
+                SelectDefaultNativeMaterialLoadMask(*renderScene,
+                                                    nativeProfiles);
+        NativeMaterialLoadResult nativeMaterials = LoadNativeMaterials(
+                *renderScene, nativeProfiles, nativeMaterialLoadMask,
+                packsDirectory);
+        StaticVisualBatchOptions batchOptions;
+        batchOptions.materialStates = nativeMaterials.renderStates;
         StaticVisualBatchResult batches =
-                BuildStaticVisualBatches(*renderScene);
+                BuildStaticVisualBatches(*renderScene, batchOptions);
+#if FOREVERTAS_GPU_RAY_TRACING
         result.rayTracingScene = BuildRayTracingScene(batches.batches);
+#endif
         result.materialCount =
                 static_cast<qint64>(renderScene->materials.size());
         result.diagnosticCount +=
                 static_cast<qint64>(renderScene->diagnostics.size()) +
                 static_cast<qint64>(batches.invalidInstanceCount) +
-                static_cast<qint64>(batches.duplicateInstanceCount);
+                static_cast<qint64>(batches.duplicateInstanceCount) +
+                static_cast<qint64>(
+                        nativeMaterials.telemetry.failedTextureCount);
         result.sourceVisualObjectCount =
                 static_cast<qint64>(batches.defaultVisibleInstanceCount);
         result.sourceVisualMeshCount =
@@ -1273,8 +1357,7 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
         result.visualBoundsMax = batches.defaultBoundsMax;
 
         struct MaterialBindingKey {
-            ReplacementMaterialClass materialClass =
-                    ReplacementMaterialClass::Unknown;
+            std::uint32_t sourceMaterialIndex = 0u;
             bool vertexColors = false;
         };
         std::vector<MaterialBindingKey> materialBindings;
@@ -1291,15 +1374,24 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                  ++materialBindingIndex) {
                 const MaterialBindingKey &binding =
                         materialBindings[materialBindingIndex];
-                if (binding.materialClass == batch.materialClass &&
+                if (binding.sourceMaterialIndex ==
+                            batch.sourceMaterialIndex &&
                     binding.vertexColors == applyVertexColors) {
                     break;
                 }
             }
             if (materialBindingIndex == materialBindings.size()) {
                 materialBindings.push_back(
-                        {batch.materialClass, applyVertexColors});
-                QVariantMap binding = MaterialMap(batch.materialClass);
+                        {batch.sourceMaterialIndex, applyVertexColors});
+                const NativeMaterialRuntime *native =
+                        batch.sourceMaterialIndex <
+                                        nativeMaterials.materials.size()
+                                ? &nativeMaterials.materials[
+                                          batch.sourceMaterialIndex]
+                                : nullptr;
+                QVariantMap binding = MaterialMap(
+                        batch.materialClass, batch.sourceMaterialIndex,
+                        native);
                 binding.insert(QStringLiteral("vertexColors"),
                                applyVertexColors);
                 if (batch.materialClass == ReplacementMaterialClass::Unknown) {
@@ -1317,12 +1409,234 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                         MaterialClassName(batch.materialClass));
             item.insert(QStringLiteral("defaultVisible"),
                         batch.defaultVisible);
+            item.insert(QStringLiteral("materialVisible"),
+                        batch.sourceMaterialIndex <
+                                        nativeMaterials.materials.size()
+                                ? nativeMaterials.materials[
+                                          batch.sourceMaterialIndex]
+                                          .profile.visible
+                                : true);
+            item.insert(QStringLiteral("alphaMode"),
+                        StaticVisualAlphaModeName(batch.alphaMode));
+            item.insert(QStringLiteral("doubleSided"), batch.doubleSided);
+            item.insert(QStringLiteral("spatiallyPartitioned"),
+                        batch.spatiallyPartitioned);
+            item.insert(QStringLiteral("cellX"), batch.cellX);
+            item.insert(QStringLiteral("cellZ"), batch.cellZ);
             item.insert(QStringLiteral("sourceInstanceCount"),
                         static_cast<qint64>(batch.sourceInstanceCount));
             item.insert(QStringLiteral("triangleCount"),
                         static_cast<qint64>(batch.triangleCount));
             result.visualBatchItems.push_back(std::move(item));
         }
+
+        // The vehicle scene is local to the car. Keep it out of the static
+        // map batches so one set of GPU buffers can be instanced below every
+        // run pose without baking a particular world transform into it.
+        qint64 vehicleReferencedTextures = 0;
+        qint64 vehicleResolvedTextures = 0;
+        qint64 vehicleFailedTextures = 0;
+        QString vehicleVisualDiagnostic;
+        auto vehicleRenderSceneResult = sandbox.ReadVehicleRenderScene();
+        if (vehicleRenderSceneResult) {
+            PhysicsSandboxRenderSceneHandle vehicleRenderScene =
+                    std::move(vehicleRenderSceneResult).Value();
+            if (vehicleRenderScene) {
+                const std::vector<NativeMaterialProfile> vehicleProfiles =
+                        ResolveNativeMaterialProfiles(*vehicleRenderScene);
+                const std::vector<bool> vehicleMaterialLoadMask =
+                        SelectDefaultNativeMaterialLoadMask(*vehicleRenderScene,
+                                                            vehicleProfiles);
+                NativeMaterialLoadResult vehicleNativeMaterials =
+                        LoadNativeMaterials(
+                                *vehicleRenderScene, vehicleProfiles,
+                                vehicleMaterialLoadMask, packsDirectory);
+                vehicleReferencedTextures =
+                        static_cast<qint64>(vehicleNativeMaterials.telemetry
+                                                    .referencedTextureCount);
+                vehicleResolvedTextures = static_cast<qint64>(
+                        vehicleNativeMaterials.telemetry.resolvedTextureCount);
+                vehicleFailedTextures = static_cast<qint64>(
+                        vehicleNativeMaterials.telemetry.failedTextureCount);
+                StaticVisualBatchOptions vehicleBatchOptions;
+                vehicleBatchOptions.materialStates =
+                        vehicleNativeMaterials.renderStates;
+                vehicleBatchOptions.cellSize = 0.0f;
+                StaticVisualBatchResult vehicleBatches =
+                        BuildStaticVisualBatches(*vehicleRenderScene,
+                                                 vehicleBatchOptions);
+
+                result.materialCount += static_cast<qint64>(
+                        vehicleRenderScene->materials.size());
+                result.diagnosticCount += static_cast<qint64>(
+                        vehicleRenderScene->diagnostics.size() +
+                        vehicleBatches.invalidInstanceCount +
+                        vehicleBatches.duplicateInstanceCount +
+                        vehicleNativeMaterials.telemetry.failedTextureCount);
+
+                std::vector<MaterialBindingKey> vehicleMaterialBindings;
+                result.vehicleVisualBatches = std::move(vehicleBatches.batches);
+                result.vehicleVisualBatchItems.reserve(
+                        result.vehicleVisualBatches.size());
+                for (std::size_t batchIndex = 0u;
+                     batchIndex < result.vehicleVisualBatches.size();
+                     ++batchIndex) {
+                    const StaticVisualBatch &batch =
+                            result.vehicleVisualBatches[batchIndex];
+                    const bool applyVertexColors =
+                            batch.hasVertexColors &&
+                            ReplacementFor(batch.materialClass)
+                                    .applyVertexColors;
+                    std::size_t materialBindingIndex = 0u;
+                    for (;
+                         materialBindingIndex < vehicleMaterialBindings.size();
+                         ++materialBindingIndex) {
+                        const MaterialBindingKey &binding =
+                                vehicleMaterialBindings[materialBindingIndex];
+                        if (binding.sourceMaterialIndex ==
+                                    batch.sourceMaterialIndex &&
+                            binding.vertexColors == applyVertexColors) {
+                            break;
+                        }
+                    }
+                    if (materialBindingIndex ==
+                        vehicleMaterialBindings.size()) {
+                        vehicleMaterialBindings.push_back(
+                                {batch.sourceMaterialIndex, applyVertexColors});
+                        const bool hasNativeMaterial =
+                                batch.sourceMaterialIndex <
+                                vehicleNativeMaterials.materials.size();
+                        const NativeMaterialRuntime *native =
+                                hasNativeMaterial
+                                        ? &vehicleNativeMaterials.materials[
+                                                  batch.sourceMaterialIndex]
+                                        : nullptr;
+                        QVariantMap binding =
+                                MaterialMap(batch.materialClass,
+                                            batch.sourceMaterialIndex, native);
+                        binding.insert(QStringLiteral("vertexColors"),
+                                       applyVertexColors);
+                        result.vehicleVisualMaterials.push_back(
+                                std::move(binding));
+                    }
+
+                    QVariantMap item;
+                    item.insert(QStringLiteral("batchIndex"),
+                                static_cast<qint64>(batchIndex));
+                    item.insert(QStringLiteral("materialBindingIndex"),
+                                static_cast<qint64>(materialBindingIndex));
+                    item.insert(QStringLiteral("materialClass"),
+                                MaterialClassName(batch.materialClass));
+                    item.insert(QStringLiteral("defaultVisible"),
+                                batch.defaultVisible);
+                    const bool hasNativeMaterial =
+                            batch.sourceMaterialIndex <
+                            vehicleNativeMaterials.materials.size();
+                    item.insert(
+                            QStringLiteral("materialVisible"),
+                            hasNativeMaterial
+                                    ? vehicleNativeMaterials.materials[
+                                              batch.sourceMaterialIndex]
+                                              .profile.visible
+                                    : true);
+                    item.insert(QStringLiteral("alphaMode"),
+                                StaticVisualAlphaModeName(batch.alphaMode));
+                    item.insert(QStringLiteral("doubleSided"),
+                                batch.doubleSided);
+                    item.insert(QStringLiteral("triangleCount"),
+                                static_cast<qint64>(batch.triangleCount));
+                    result.vehicleVisualBatchItems.push_back(std::move(item));
+                }
+                if (result.vehicleVisualBatches.empty()) {
+                    vehicleVisualDiagnostic = QStringLiteral(
+                            "vehicle render scene contained no renderable "
+                            "batches");
+                }
+            }
+        } else {
+            // A missing vehicle visual is non-fatal. The physics ellipsoids
+            // remain available as an explicit renderer fallback.
+            ++result.diagnosticCount;
+            vehicleVisualDiagnostic =
+                    SandboxErrorText(vehicleRenderSceneResult.Error());
+        }
+        result.renderTelemetry = {
+                {QStringLiteral("referencedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .referencedTextureCount)},
+                {QStringLiteral("resolvedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .resolvedTextureCount)},
+                {QStringLiteral("failedTextures"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .failedTextureCount)},
+                {QStringLiteral("textureCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry.cacheHitCount)},
+                {QStringLiteral("textureMemoryCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .memoryCacheHitCount)},
+                {QStringLiteral("textureDiskCacheHits"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .diskCacheHitCount)},
+                {QStringLiteral("nativeMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .nativeMaterialCount)},
+                {QStringLiteral("fallbackMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .fallbackMaterialCount)},
+                {QStringLiteral("worldProjectedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .worldProjectedMaterialCount)},
+                {QStringLiteral("maskedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .maskedMaterialCount)},
+                {QStringLiteral("blendedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .blendedMaterialCount)},
+                {QStringLiteral("additiveMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .additiveMaterialCount)},
+                {QStringLiteral("subtractiveMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .subtractiveMaterialCount)},
+                {QStringLiteral("doubleSidedMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .doubleSidedMaterialCount)},
+                {QStringLiteral("unlitMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .unlitMaterialCount)},
+                {QStringLiteral("estimatedTextureMiB"),
+                 static_cast<double>(nativeMaterials.telemetry
+                                             .estimatedGpuByteCount) /
+                         (1024.0 * 1024.0)},
+                {QStringLiteral("textureLoadMs"),
+                 static_cast<double>(nativeMaterials.telemetry
+                                             .loadNanoseconds) /
+                         1000000.0},
+                {QStringLiteral("sceneBuildMs"),
+                 static_cast<double>(batches.telemetry.totalBuildNanoseconds) /
+                         1000000.0},
+                {QStringLiteral("submittedBatches"),
+                 static_cast<qint64>(
+                         batches.telemetry.submittedBatchCount)},
+                {QStringLiteral("spatialCells"),
+                 static_cast<qint64>(
+                         batches.telemetry.populatedSpatialCellCount)}};
+        result.renderTelemetry.insert(
+                QStringLiteral("vehicleBatches"),
+                static_cast<qint64>(result.vehicleVisualBatches.size()));
+        result.renderTelemetry.insert(
+                QStringLiteral("vehicleMaterials"),
+                static_cast<qint64>(result.vehicleVisualMaterials.size()));
+        result.renderTelemetry.insert(
+                QStringLiteral("vehicleReferencedTextures"),
+                vehicleReferencedTextures);
+        result.renderTelemetry.insert(QStringLiteral("vehicleResolvedTextures"),
+                                      vehicleResolvedTextures);
+        result.renderTelemetry.insert(QStringLiteral("vehicleFailedTextures"),
+                                      vehicleFailedTextures);
+        result.renderTelemetry.insert(QStringLiteral("vehicleVisualDiagnostic"),
+                                      vehicleVisualDiagnostic);
         if (result.sourceVisualObjectCount == 0) {
             result.visualBoundsMin = result.track.boundsMin;
             result.visualBoundsMax = result.track.boundsMax;
@@ -1433,6 +1747,7 @@ std::vector<RaceViewerFrame> ToViewerFrames(
                 frame.totalLaps,
                 frame.raceCompleted,
                 frame.finishTimeMs,
+                frame.respawnCount,
                 QVector3D(frame.linearSpeedX,
                           frame.linearSpeedY,
                           frame.linearSpeedZ),
@@ -1445,7 +1760,10 @@ std::vector<RaceViewerFrame> ToViewerFrames(
                 frame.wheelHasSurface,
                 QVector3D(frame.cameraSupportUpX,
                           frame.cameraSupportUpY,
-                          frame.cameraSupportUpZ)});
+                          frame.cameraSupportUpZ),
+                ToQt(frame.wheelGroundPosition),
+                frame.wheelSliding,
+                frame.wheelSurface});
     }
     return result;
 }
@@ -1485,6 +1803,7 @@ RaceViewerFrame ToViewerFrame(const PhysicsSandboxStateView &state) {
             state.totalLaps,
             state.raceCompleted,
             state.finishTimeMs,
+            state.respawnCount,
             ToQt(state.car.linearSpeed),
             state.car.signedSpeed,
             state.car.turbo,
@@ -1493,7 +1812,47 @@ RaceViewerFrame ToViewerFrame(const PhysicsSandboxStateView &state) {
             state.car.gearChanged,
             state.car.wheelContact,
             state.car.wheelHasSurface,
-            ToQt(state.car.cameraSupportUp)};
+            ToQt(state.car.cameraSupportUp),
+            ToQt(state.car.wheelGroundPosition),
+            state.car.wheelSliding,
+            state.car.wheelSurface};
+}
+
+SkidmarkSample ToSkidmarkSample(const RaceViewerFrame &frame) {
+    SkidmarkSample sample;
+    sample.timeMs = frame.timeMs;
+    sample.respawnCount = frame.respawnCount;
+    sample.carRotation = frame.rotation;
+    for (std::size_t wheel = 0u; wheel < sample.wheels.size(); ++wheel) {
+        SkidmarkWheelSample &destination = sample.wheels[wheel];
+        destination.groundPosition = frame.wheelGroundPosition[wheel];
+        destination.contact =
+                frame.wheelContact[wheel] && frame.wheelHasSurface[wheel];
+        destination.sliding = frame.wheelSliding[wheel];
+        destination.surface = frame.wheelSurface[wheel];
+    }
+    return sample;
+}
+
+bool SkidmarkStateChanged(const RaceViewerFrame &before,
+                          const RaceViewerFrame &after) {
+    if (before.respawnCount != after.respawnCount) {
+        return true;
+    }
+    for (std::size_t wheel = 0u; wheel < before.wheelSliding.size(); ++wheel) {
+        const bool beforeActive = before.wheelContact[wheel] &&
+                                  before.wheelHasSurface[wheel] &&
+                                  before.wheelSliding[wheel];
+        const bool afterActive = after.wheelContact[wheel] &&
+                                 after.wheelHasSurface[wheel] &&
+                                 after.wheelSliding[wheel];
+        if (beforeActive != afterActive ||
+            (afterActive &&
+             before.wheelSurface[wheel] != after.wheelSurface[wheel])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 RaceViewerInputPreviewResult BuildInputPreview(
@@ -1931,12 +2290,100 @@ QVariantList RaceViewerController::visualMaterials() const {
     return visualMaterials_;
 }
 
+QVariantList RaceViewerController::vehicleVisualBatches() const {
+    return vehicleVisualBatches_;
+}
+
+QVariantList RaceViewerController::vehicleVisualMaterials() const {
+    return vehicleVisualMaterials_;
+}
+
+bool HasRenderableVehicleVisual(const QVariantList &batches,
+                                const QVariantList &materials) {
+    if (materials.isEmpty()) {
+        return false;
+    }
+    return std::any_of(
+            batches.cbegin(), batches.cend(),
+            [](const QVariant &entry) {
+                const QVariantMap batch = entry.toMap();
+                return batch.value(QStringLiteral("defaultVisible"))
+                                       .toBool() &&
+                       batch.value(QStringLiteral("materialVisible"))
+                               .toBool();
+            });
+}
+
+bool RaceViewerController::vehicleVisualAvailable() const {
+    return HasRenderableVehicleVisual(vehicleVisualBatches_,
+                                      vehicleVisualMaterials_);
+}
+
 QVariantList RaceViewerController::trajectoryPaths() const {
     return trajectoryPaths_;
 }
 
 qint64 RaceViewerController::trajectoryCount() const {
     return static_cast<qint64>(trajectoryPaths_.size());
+}
+
+QVariantList RaceViewerController::skidmarkPaths() const {
+    QVariantList paths;
+    if (!skidmarksEnabled_) {
+        return paths;
+    }
+    paths.reserve(static_cast<qsizetype>(runs_.size()));
+    for (const RaceViewerRun &run : runs_) {
+        if (run.skidmarkGeometry == nullptr) {
+            continue;
+        }
+        const std::size_t ribbonSegments =
+                run.skidmarkGeometry->ribbonSegmentCount();
+        const std::size_t stamps = run.skidmarkGeometry->stampCount();
+        if (ribbonSegments == 0u && stamps == 0u) {
+            continue;
+        }
+        QVariantMap path;
+        path.insert(QStringLiteral("runId"), run.id);
+        path.insert(QStringLiteral("geometry"),
+                    QVariant::fromValue(static_cast<QObject *>(
+                            run.skidmarkGeometry.get())));
+        path.insert(QStringLiteral("ribbonSegmentCount"),
+                    static_cast<qulonglong>(ribbonSegments));
+        path.insert(QStringLiteral("stampCount"),
+                    static_cast<qulonglong>(stamps));
+        paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+qint64 RaceViewerController::skidmarkCount() const {
+    return static_cast<qint64>(skidmarkPaths().size());
+}
+
+bool RaceViewerController::skidmarksEnabled() const {
+    return skidmarksEnabled_;
+}
+
+void RaceViewerController::setSkidmarksEnabled(bool value) {
+    if (skidmarksEnabled_ == value) {
+        return;
+    }
+    skidmarksEnabled_ = value;
+    if (skidmarksEnabled_) {
+        for (RaceViewerRun &run : runs_) {
+            rebuildSkidmarks(run);
+        }
+    } else {
+        for (RaceViewerRun &run : runs_) {
+            if (run.skidmarkGeometry != nullptr) {
+                run.skidmarkGeometry->clearMesh();
+            }
+            run.skidmarkBuiltThroughTimeMs = -1;
+        }
+    }
+    emit skidmarksEnabledChanged();
+    emit skidmarksChanged();
 }
 
 QString RaceViewerController::previewInputScript() const {
@@ -2247,6 +2694,10 @@ qint64 RaceViewerController::materialCount() const {
 
 qint64 RaceViewerController::diagnosticCount() const {
     return diagnosticCount_;
+}
+
+QVariantMap RaceViewerController::rendererTelemetry() const {
+    return renderTelemetry_;
 }
 
 qint64 RaceViewerController::ellipsoidCount() const {
@@ -2916,7 +3367,9 @@ bool RaceViewerController::startSimulationDebugger() {
     RaceViewerRun *const run = selectedRun();
     if (run != nullptr && run->id == QStringLiteral("debug")) {
         run->frames.clear();
+        rebuildSkidmarks(*run);
         refreshSelectedRun();
+        emit skidmarksChanged();
         emit timelineChanged();
         emit timeChanged();
     }
@@ -2935,6 +3388,14 @@ void RaceViewerController::stopSimulationDebugger() {
     }
     pause();
     simulationDebugger_.stopSession();
+    auto debugRun = std::find_if(runs_.begin(), runs_.end(),
+                                 [](const RaceViewerRun &run) {
+                                     return run.id == QStringLiteral("debug");
+                                 });
+    if (debugRun != runs_.end()) {
+        rebuildSkidmarks(*debugRun);
+        emit skidmarksChanged();
+    }
     setStatusText(QStringLiteral("Native source debugging stopped"));
 }
 
@@ -3913,6 +4374,7 @@ void RaceViewerController::clearInputPreview() {
     }
     runs_.erase(previewRun);
     emit runsChanged();
+    emit skidmarksChanged();
     if (selected) {
         selectedRunId_ = runs_.empty() ? QString{} : runs_.front().id;
         emit selectedRunChanged();
@@ -4115,10 +4577,45 @@ void RaceViewerController::applyLoadResult(
                                 .get())));
         visualBatches.push_back(std::move(item));
     }
+    std::vector<std::unique_ptr<RaceGeometry>> vehicleVisualGeometries;
+    vehicleVisualGeometries.reserve(result.vehicleVisualBatches.size());
+    for (StaticVisualBatch &batch : result.vehicleVisualBatches) {
+        auto geometry = std::make_unique<RaceGeometry>();
+        const int indexCount =
+                static_cast<int>(batch.indices.size() /
+                                 static_cast<qsizetype>(sizeof(std::uint32_t)));
+        geometry->setIndexedMesh(std::move(batch.vertices),
+                                 std::move(batch.indices),
+                                 StaticVisualVertexStride, true, true, true,
+                                 true, batch.hasVertexColors, batch.boundsMin,
+                                 batch.boundsMax, {{0, indexCount}});
+        vehicleVisualGeometries.push_back(std::move(geometry));
+    }
+    QVariantList vehicleVisualBatches;
+    vehicleVisualBatches.reserve(result.vehicleVisualBatchItems.size());
+    for (QVariant &entry : result.vehicleVisualBatchItems) {
+        QVariantMap item = entry.toMap();
+        const qint64 batchIndex =
+                item.value(QStringLiteral("batchIndex")).toLongLong();
+        if (batchIndex < 0 ||
+            batchIndex >= static_cast<qint64>(vehicleVisualGeometries.size())) {
+            continue;
+        }
+        item.insert(QStringLiteral("geometry"),
+                    QVariant::fromValue(static_cast<QObject *>(
+                            vehicleVisualGeometries[
+                                    static_cast<std::size_t>(batchIndex)]
+                                    .get())));
+        vehicleVisualBatches.push_back(std::move(item));
+    }
     visualGeometries_ = std::move(visualGeometries);
+    vehicleVisualGeometries_ = std::move(vehicleVisualGeometries);
     rayTracingScene_ = std::move(result.rayTracingScene);
     visualMaterials_ = std::move(result.visualMaterials);
+    vehicleVisualMaterials_ = std::move(result.vehicleVisualMaterials);
+    renderTelemetry_ = std::move(result.renderTelemetry);
     visualBatches_ = std::move(visualBatches);
+    vehicleVisualBatches_ = std::move(vehicleVisualBatches);
     carEllipsoids_ = std::move(result.carEllipsoids);
     triangleCount_ = result.triangleCount;
     visualTriangleCount_ = result.visualTriangleCount;
@@ -4187,6 +4684,7 @@ void RaceViewerController::applyLoadResult(
     emit runsChanged();
     emit selectedRunChanged();
     emit trajectoriesChanged();
+    emit skidmarksChanged();
     emit timelineChanged();
     emit timeChanged();
     if (!queuedMapLoad_) setLoading(false);
@@ -4270,6 +4768,83 @@ RaceViewerRun *RaceViewerController::selectedRun() noexcept {
     return selected == runs_.end() ? nullptr : &*selected;
 }
 
+void RaceViewerController::rebuildSkidmarks(RaceViewerRun &run) {
+    if (!skidmarksEnabled_) {
+        run.skidmarkBuiltThroughTimeMs = -1;
+        return;
+    }
+    if (run.skidmarkGeometry == nullptr) {
+        run.skidmarkGeometry = std::make_unique<SkidmarkGeometry>();
+    }
+
+    std::vector<SkidmarkSample> samples;
+    samples.reserve(run.frames.size());
+    for (const RaceViewerFrame &frame : run.frames) {
+        samples.push_back(ToSkidmarkSample(frame));
+    }
+
+    try {
+        run.skidmarkGeometry->setSkidmarkMesh(BuildSkidmarkMesh(samples));
+    } catch (const std::exception &) {
+        run.skidmarkGeometry->clearMesh();
+    }
+    run.skidmarkBuiltThroughTimeMs =
+            run.frames.empty() ? -1 : run.frames.back().timeMs;
+}
+
+void RaceViewerController::rebuildLiveSkidmarks(RaceViewerRun &run) {
+    if (!skidmarksEnabled_) {
+        run.skidmarkBuiltThroughTimeMs = -1;
+        return;
+    }
+    if (run.skidmarkGeometry == nullptr) {
+        run.skidmarkGeometry = std::make_unique<SkidmarkGeometry>();
+    }
+    if (run.frames.empty()) {
+        run.skidmarkGeometry->clearMesh();
+        run.skidmarkBuiltThroughTimeMs = -1;
+        return;
+    }
+
+    const qint64 newestTimeMs = run.frames.back().timeMs;
+    const qint64 cutoffTimeMs = std::max<qint64>(
+            run.frames.front().timeMs, newestTimeMs - kLiveSkidmarkWindowMs);
+    auto begin =
+            std::lower_bound(run.frames.begin(), run.frames.end(), cutoffTimeMs,
+                             [](const RaceViewerFrame &frame, qint64 timeMs) {
+                                 return frame.timeMs < timeMs;
+                             });
+
+    std::vector<SkidmarkSample> samples;
+    const std::size_t maximumRegularSamples = static_cast<std::size_t>(
+            kLiveSkidmarkWindowMs / kLiveSkidmarkSampleIntervalMs + 2);
+    samples.reserve(std::min<std::size_t>(
+            maximumRegularSamples,
+            static_cast<std::size_t>(run.frames.end() - begin)));
+    qint64 lastIncludedTimeMs = std::numeric_limits<qint64>::min();
+    const RaceViewerFrame *previous = nullptr;
+    for (auto frame = begin; frame != run.frames.end(); ++frame) {
+        const bool first = frame == begin;
+        const bool last = frame + 1 == run.frames.end();
+        const bool transition =
+                previous != nullptr && SkidmarkStateChanged(*previous, *frame);
+        if (first || last || transition ||
+            frame->timeMs - lastIncludedTimeMs >=
+                    kLiveSkidmarkSampleIntervalMs) {
+            samples.push_back(ToSkidmarkSample(*frame));
+            lastIncludedTimeMs = frame->timeMs;
+        }
+        previous = &*frame;
+    }
+
+    try {
+        run.skidmarkGeometry->setSkidmarkMesh(BuildSkidmarkMesh(samples));
+    } catch (const std::exception &) {
+        run.skidmarkGeometry->clearMesh();
+    }
+    run.skidmarkBuiltThroughTimeMs = newestTimeMs;
+}
+
 void RaceViewerController::upsertRun(QString id,
                                      QString name,
                                      std::vector<RaceViewerFrame> frames,
@@ -4287,17 +4862,19 @@ void RaceViewerController::upsertRun(QString id,
                 return run.id == id;
             });
     const QString runId = id;
+    RaceViewerRun *updatedRun = nullptr;
     if (existing == runs_.end()) {
         std::vector<RaceViewerSplit> checkpointSplits =
                 BuildCheckpointSplits(frames);
-        runs_.push_back({std::move(id),
-                         std::move(name),
-                         std::move(frames),
-                         std::move(inputs),
-                         {},
-                         {},
-                         std::move(checkpointSplits),
-                         std::move(runtime)});
+        RaceViewerRun run;
+        run.id = std::move(id);
+        run.name = std::move(name);
+        run.frames = std::move(frames);
+        run.inputs = std::move(inputs);
+        run.checkpointSplits = std::move(checkpointSplits);
+        run.runtime = std::move(runtime);
+        runs_.push_back(std::move(run));
+        updatedRun = &runs_.back();
     } else {
         existing->name = std::move(name);
         existing->frames = std::move(frames);
@@ -4307,8 +4884,11 @@ void RaceViewerController::upsertRun(QString id,
         if (runtime != nullptr) {
             existing->runtime = std::move(runtime);
         }
+        updatedRun = &*existing;
     }
+    rebuildSkidmarks(*updatedRun);
     emit runsChanged();
+    emit skidmarksChanged();
 
     if (selectedRunId_.isEmpty()) {
         selectedRunId_ = runId;
@@ -4421,6 +5001,16 @@ void RaceViewerController::appendSimulationDebuggerFrame(
             frame.value(QStringLiteral("rotation")).toList();
     const QVariantList linearSpeed =
             frame.value(QStringLiteral("linearSpeed")).toList();
+    const QVariantList wheelGroundPositions =
+            frame.value(QStringLiteral("wheelGroundPosition")).toList();
+    const QVariantList wheelContact =
+            frame.value(QStringLiteral("wheelContact")).toList();
+    const QVariantList wheelHasSurface =
+            frame.value(QStringLiteral("wheelHasSurface")).toList();
+    const QVariantList wheelSliding =
+            frame.value(QStringLiteral("wheelSliding")).toList();
+    const QVariantList wheelSurface =
+            frame.value(QStringLiteral("wheelSurface")).toList();
     if (position.size() != 3 || rotation.size() != 4) {
         setStatusText(QStringLiteral(
                 "Native debugger returned an invalid car pose."));
@@ -4428,36 +5018,72 @@ void RaceViewerController::appendSimulationDebuggerFrame(
         return;
     }
 
-    const RaceViewerFrame viewerFrame{
-            frame.value(QStringLiteral("timeMs")).toLongLong(),
-            QVector3D(
-                    position[0].toFloat(),
-                    position[1].toFloat(),
-                    position[2].toFloat()),
-            QQuaternion(
-                    rotation[3].toFloat(),
-                    rotation[0].toFloat(),
-                    rotation[1].toFloat(),
-                    rotation[2].toFloat())
-                    .normalized(),
-            frame.value(QStringLiteral("accelerate")).toFloat(),
-            frame.value(QStringLiteral("brake")).toFloat(),
-            frame.value(QStringLiteral("steering")).toFloat(),
-            frame.value(QStringLiteral("checkpointsCollected")).toUInt(),
-            frame.value(QStringLiteral("checkpointsTotal")).toUInt(),
-            frame.value(QStringLiteral("completedLaps")).toUInt(),
-            frame.value(QStringLiteral("totalLaps")).toUInt(),
-            frame.value(QStringLiteral("raceCompleted")).toBool(),
-            frame.contains(QStringLiteral("finishTimeMs"))
-                    ? std::optional<std::uint32_t>(
-                              frame.value(QStringLiteral("finishTimeMs"))
-                                      .toUInt())
-                    : std::nullopt,
-            linearSpeed.size() == 3
-                    ? QVector3D(linearSpeed[0].toFloat(),
-                                linearSpeed[1].toFloat(),
-                                linearSpeed[2].toFloat())
-                    : QVector3D{}};
+    RaceViewerFrame viewerFrame;
+    viewerFrame.timeMs = frame.value(QStringLiteral("timeMs")).toLongLong();
+    viewerFrame.position = QVector3D(position[0].toFloat(),
+                                     position[1].toFloat(),
+                                     position[2].toFloat());
+    viewerFrame.rotation =
+            QQuaternion(rotation[3].toFloat(), rotation[0].toFloat(),
+                        rotation[1].toFloat(), rotation[2].toFloat())
+                    .normalized();
+    viewerFrame.accelerate =
+            frame.value(QStringLiteral("accelerate")).toFloat();
+    viewerFrame.brake = frame.value(QStringLiteral("brake")).toFloat();
+    viewerFrame.steering =
+            frame.value(QStringLiteral("steering")).toFloat();
+    viewerFrame.checkpointsCollected =
+            frame.value(QStringLiteral("checkpointsCollected")).toUInt();
+    viewerFrame.checkpointsTotal =
+            frame.value(QStringLiteral("checkpointsTotal")).toUInt();
+    viewerFrame.completedLaps =
+            frame.value(QStringLiteral("completedLaps")).toUInt();
+    viewerFrame.totalLaps =
+            frame.value(QStringLiteral("totalLaps")).toUInt();
+    viewerFrame.raceCompleted =
+            frame.value(QStringLiteral("raceCompleted")).toBool();
+    if (frame.contains(QStringLiteral("finishTimeMs"))) {
+        viewerFrame.finishTimeMs =
+                frame.value(QStringLiteral("finishTimeMs")).toUInt();
+    }
+    viewerFrame.respawnCount =
+            frame.value(QStringLiteral("respawnCount")).toUInt();
+    if (linearSpeed.size() == 3) {
+        viewerFrame.linearSpeed =
+                QVector3D(linearSpeed[0].toFloat(), linearSpeed[1].toFloat(),
+                          linearSpeed[2].toFloat());
+    }
+    for (std::size_t wheel = 0u;
+         wheel < viewerFrame.wheelGroundPosition.size(); ++wheel) {
+        if (wheel < static_cast<std::size_t>(wheelGroundPositions.size())) {
+            const QVariantList ground =
+                    wheelGroundPositions[static_cast<qsizetype>(wheel)]
+                            .toList();
+            if (ground.size() == 3) {
+                viewerFrame.wheelGroundPosition[wheel] =
+                        QVector3D(ground[0].toFloat(), ground[1].toFloat(),
+                                  ground[2].toFloat());
+            }
+        }
+        if (wheel < static_cast<std::size_t>(wheelContact.size())) {
+            viewerFrame.wheelContact[wheel] =
+                    wheelContact[static_cast<qsizetype>(wheel)].toBool();
+        }
+        if (wheel < static_cast<std::size_t>(wheelHasSurface.size())) {
+            viewerFrame.wheelHasSurface[wheel] =
+                    wheelHasSurface[static_cast<qsizetype>(wheel)].toBool();
+        }
+        if (wheel < static_cast<std::size_t>(wheelSliding.size())) {
+            viewerFrame.wheelSliding[wheel] =
+                    wheelSliding[static_cast<qsizetype>(wheel)].toBool();
+        }
+        if (wheel < static_cast<std::size_t>(wheelSurface.size())) {
+            viewerFrame.wheelSurface[wheel] =
+                    static_cast<std::uint16_t>(
+                            wheelSurface[static_cast<qsizetype>(wheel)]
+                                    .toUInt());
+        }
+    }
 
     auto found = std::find_if(
             runs_.begin(), runs_.end(), [](const RaceViewerRun &run) {
@@ -4466,15 +5092,12 @@ void RaceViewerController::appendSimulationDebuggerFrame(
     if (found == runs_.end()) {
         std::vector<RaceViewerSplit> checkpointSplits =
                 BuildCheckpointSplits({viewerFrame});
-        runs_.push_back(
-                {QStringLiteral("debug"),
-                 QStringLiteral("Reference source"),
-                 {viewerFrame},
-                 {},
-                 {},
-                 {},
-                 std::move(checkpointSplits),
-                 {}});
+        RaceViewerRun run;
+        run.id = QStringLiteral("debug");
+        run.name = QStringLiteral("Reference source");
+        run.frames = {viewerFrame};
+        run.checkpointSplits = std::move(checkpointSplits);
+        runs_.push_back(std::move(run));
         found = std::prev(runs_.end());
         emit runsChanged();
     } else if (
@@ -4511,6 +5134,14 @@ void RaceViewerController::appendSimulationDebuggerFrame(
             static_cast<qint64>(found->frames.back().timeMs),
             frame.value(QStringLiteral("horizonMs")).toLongLong());
     timeMs_ = found->frames.back().timeMs;
+    const RaceViewerFrame &lastFrame = found->frames.back();
+    if (skidmarksEnabled_ &&
+        (lastFrame.timeMs - found->skidmarkBuiltThroughTimeMs >=
+                 LiveSkidmarkRebuildIntervalMs(lastFrame.timeMs) ||
+         lastFrame.raceCompleted)) {
+        rebuildLiveSkidmarks(*found);
+        emit skidmarksChanged();
+    }
     updatePose();
     setStatusText(simulationDebugger_.statusText());
     emit timelineChanged();
@@ -4574,6 +5205,14 @@ void RaceViewerController::advanceManualDrive() {
         }
     }
     if (changed) {
+        const RaceViewerFrame &lastFrame = run->frames.back();
+        if (skidmarksEnabled_ &&
+            (lastFrame.timeMs - run->skidmarkBuiltThroughTimeMs >=
+                     LiveSkidmarkRebuildIntervalMs(lastFrame.timeMs) ||
+             lastFrame.raceCompleted)) {
+            rebuildLiveSkidmarks(*run);
+            emit skidmarksChanged();
+        }
         updatePose();
         emit timelineChanged();
         emit timeChanged();
@@ -4635,7 +5274,9 @@ void RaceViewerController::finishManualDrive(
             });
     if (manualRun != runs_.end()) {
         manualRun->inputs = effectiveManualInputs();
+        rebuildSkidmarks(*manualRun);
         emit runsChanged();
+        emit skidmarksChanged();
     }
     resetManualInputState();
     setStatusText(status);

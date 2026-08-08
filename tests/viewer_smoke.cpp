@@ -326,6 +326,148 @@ int main(int argc, char **argv) {
                             application.quit();
                             return;
                         }
+                        const QVariantMap renderer = viewer.rendererTelemetry();
+                        bool hasNativeAlbedo = false;
+                        for (const QVariant &entry : viewer.visualMaterials()) {
+                            const QVariantMap material = entry.toMap();
+                            hasNativeAlbedo |=
+                                    material.value(QStringLiteral(
+                                                           "nativeAlbedo"))
+                                            .toBool() &&
+                                    material.value(QStringLiteral(
+                                                           "baseTexture"))
+                                            .toUrl()
+                                            .isLocalFile();
+                        }
+                        const bool nativeRendererValid =
+                                renderer.value(QStringLiteral(
+                                                       "resolvedTextures"))
+                                                .toLongLong() > 0 &&
+                                renderer.value(QStringLiteral(
+                                                       "nativeMaterials"))
+                                                .toLongLong() > 0 &&
+                                renderer.value(QStringLiteral(
+                                                       "estimatedTextureMiB"))
+                                                .toDouble() > 0.0 &&
+                                renderer.value(QStringLiteral(
+                                                       "submittedBatches"))
+                                                .toLongLong() ==
+                                        viewer.visualBatchCount() &&
+                                renderer.value(QStringLiteral(
+                                                       "submittedBatches"))
+                                                .toLongLong() > 0 &&
+                                renderer.value(QStringLiteral(
+                                                       "submittedBatches"))
+                                                .toLongLong() <
+                                        viewer.sourceVisualObjectCount() &&
+                                renderer.value(QStringLiteral("spatialCells"))
+                                                .toLongLong() > 0 &&
+                                hasNativeAlbedo;
+                        std::cout << "native renderer: resolved="
+                                  << renderer.value(QStringLiteral(
+                                                            "resolvedTextures"))
+                                             .toLongLong()
+                                  << ", nativeMaterials="
+                                  << renderer.value(QStringLiteral(
+                                                            "nativeMaterials"))
+                                             .toLongLong()
+                                  << ", fallbackMaterials="
+                                  << renderer.value(QStringLiteral(
+                                                            "fallbackMaterials"))
+                                             .toLongLong()
+                                  << ", cacheHits="
+                                  << renderer.value(QStringLiteral(
+                                                            "textureCacheHits"))
+                                             .toLongLong()
+                                  << " (memory="
+                                  << renderer.value(QStringLiteral(
+                                                            "textureMemoryCacheHits"))
+                                             .toLongLong()
+                                  << ", disk="
+                                  << renderer.value(QStringLiteral(
+                                                            "textureDiskCacheHits"))
+                                             .toLongLong()
+                                  << ")"
+                                  << ", textureMiB="
+                                  << renderer.value(QStringLiteral(
+                                                            "estimatedTextureMiB"))
+                                             .toDouble()
+                                  << ", batches="
+                                  << renderer.value(QStringLiteral(
+                                                            "submittedBatches"))
+                                             .toLongLong()
+                                  << "/"
+                                  << viewer.sourceVisualObjectCount()
+                                  << ", cells="
+                                  << renderer.value(QStringLiteral(
+                                                            "spatialCells"))
+                                             .toLongLong()
+                                  << '\n';
+                        if (!nativeRendererValid) {
+                            completed = true;
+                            std::cerr << "native material renderer did not "
+                                         "resolve game textures\n";
+                            application.quit();
+                            return;
+                        }
+                        bool vehicleHasNativeAlbedo = false;
+                        for (const QVariant &entry :
+                             viewer.vehicleVisualMaterials()) {
+                            const QVariantMap material = entry.toMap();
+                            vehicleHasNativeAlbedo |=
+                                    material.value(QStringLiteral(
+                                                           "nativeAlbedo"))
+                                                    .toBool() &&
+                                    material.value(QStringLiteral(
+                                                           "baseTexture"))
+                                                    .toUrl()
+                                                    .isLocalFile();
+                        }
+                        const bool vehicleRendererValid =
+                                viewer.vehicleVisualAvailable() &&
+                                !viewer.vehicleVisualMaterials().isEmpty() &&
+                                !viewer.vehicleVisualBatches().isEmpty() &&
+                                renderer.value(QStringLiteral(
+                                                       "vehicleBatches"))
+                                                .toLongLong() > 0 &&
+                                renderer.value(QStringLiteral(
+                                                       "vehicleResolvedTextures"))
+                                                .toLongLong() > 0 &&
+                                vehicleHasNativeAlbedo;
+                        std::cout
+                                << "vehicle renderer: batches="
+                                << renderer.value(QStringLiteral(
+                                                         "vehicleBatches"))
+                                           .toLongLong()
+                                << ", materials="
+                                << viewer.vehicleVisualMaterials().size()
+                                << ", nativeAlbedo=" << vehicleHasNativeAlbedo
+                                << ", referencedTextures="
+                                << renderer.value(QStringLiteral(
+                                                         "vehicleReferencedTextures"))
+                                           .toLongLong()
+                                << ", resolvedTextures="
+                                << renderer.value(QStringLiteral(
+                                                         "vehicleResolvedTextures"))
+                                           .toLongLong()
+                                << ", failedTextures="
+                                << renderer.value(QStringLiteral(
+                                                         "vehicleFailedTextures"))
+                                           .toLongLong()
+                                << ", diagnostic="
+                                << renderer.value(QStringLiteral(
+                                                         "vehicleVisualDiagnostic"))
+                                           .toString()
+                                           .toStdString()
+                                << '\n';
+                        if (!vehicleRendererValid) {
+                            completed = true;
+                            std::cerr
+                                    << "installed vehicle visual or native "
+                                       "skin did not resolve\n";
+                            application.quit();
+                            return;
+                        }
                         manualVerificationStarted = true;
                         const QVector3D farPosition =
                                 viewer.carCameraPosition();
@@ -1730,6 +1872,12 @@ int main(int argc, char **argv) {
                             viewer.visualMeshCount() > 0 &&
                             viewer.materialCount() > 0 &&
                             !viewer.visualMaterials().isEmpty() &&
+                            viewer.vehicleVisualAvailable() &&
+                            !viewer.vehicleVisualMaterials().isEmpty() &&
+                            !viewer.vehicleVisualBatches().isEmpty() &&
+                            viewer.rendererTelemetry()
+                                    .value(QStringLiteral("vehicleBatches"))
+                                    .toLongLong() > 0 &&
                             viewer.visualMaterials().size() <
                                     viewer.visualBatches().size() &&
                             !viewer.visualBatches().isEmpty() &&
