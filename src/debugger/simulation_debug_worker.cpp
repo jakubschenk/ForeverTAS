@@ -4,6 +4,7 @@
 #include "mutations/input_event_formatter.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -122,6 +123,39 @@ void PrintState(const PhysicsSandboxStateView &state,
             state.totalLaps,
             state.raceCompleted ? "true" : "false",
             state.respawnCount);
+    std::fputs(",\"wheelGroundPosition\":[", stdout);
+    for (std::size_t wheel = 0u;
+         wheel < state.car.wheelGroundPosition.size(); ++wheel) {
+        const auto &position = state.car.wheelGroundPosition[wheel];
+        std::printf("%s[%.17g,%.17g,%.17g]", wheel == 0u ? "" : ",",
+                    number(position.x), number(position.y),
+                    number(position.z));
+    }
+    std::fputs("],\"wheelContact\":[", stdout);
+    for (std::size_t wheel = 0u; wheel < state.car.wheelContact.size();
+         ++wheel) {
+        std::printf("%s%s", wheel == 0u ? "" : ",",
+                    state.car.wheelContact[wheel] ? "true" : "false");
+    }
+    std::fputs("],\"wheelHasSurface\":[", stdout);
+    for (std::size_t wheel = 0u; wheel < state.car.wheelHasSurface.size();
+         ++wheel) {
+        std::printf("%s%s", wheel == 0u ? "" : ",",
+                    state.car.wheelHasSurface[wheel] ? "true" : "false");
+    }
+    std::fputs("],\"wheelSliding\":[", stdout);
+    for (std::size_t wheel = 0u; wheel < state.car.wheelSliding.size();
+         ++wheel) {
+        std::printf("%s%s", wheel == 0u ? "" : ",",
+                    state.car.wheelSliding[wheel] ? "true" : "false");
+    }
+    std::fputs("],\"wheelSurface\":[", stdout);
+    for (std::size_t wheel = 0u; wheel < state.car.wheelSurface.size();
+         ++wheel) {
+        std::printf("%s%u", wheel == 0u ? "" : ",",
+                    static_cast<unsigned>(state.car.wheelSurface[wheel]));
+    }
+    std::putchar(']');
     if (state.finishTimeMs.has_value()) {
         std::printf(",\"finishTimeMs\":%u", *state.finishTimeMs);
     }

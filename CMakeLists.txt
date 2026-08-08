@@ -68,7 +68,7 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 FetchContent_Declare(
     ForeverValidator
     GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
-    GIT_TAG 12fdc1bba0e04d0df3276906423cf7cf1b3f2301
+    GIT_TAG 53ca9bc113f75d6764b5948baf53e8ac6d3519a7
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
@@ -155,6 +155,8 @@ add_library(forevertas_gui STATIC
     src/viewer/graphics_settings.h
     src/viewer/race_geometry.cpp
     src/viewer/race_geometry.h
+    src/viewer/skidmark_geometry.cpp
+    src/viewer/skidmark_geometry.h
     src/viewer/ray_tracing_scene.cpp
     src/viewer/ray_tracing_scene.h
     src/viewer/race_timeline_item.cpp
@@ -341,6 +343,7 @@ qt_add_qml_module(forevertas
     QML_FILES
         qml/AppTheme.qml
         qml/Main.qml
+        qml/SkidmarkMaterial.qml
         qml/SimulationDebuggerPanel.qml
         qml/SliderValueField.qml
         qml/ThemedButton.qml
@@ -376,6 +379,19 @@ qt_add_qml_module(forevertas
         qml/settings/Vector3Settings.qml
         qml/settings/VelocityEvaluationSettings.qml
         qml/settings/VolumeEntryEvaluationSettings.qml)
+set_source_files_properties(qml/shaders/skidmark.vert
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/skidmark.vert")
+set_source_files_properties(
+    qml/shaders/skidmark.frag
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/skidmark.frag")
+set(FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX
+    "/qt/qml/ForeverTAS/qml")
+set(FOREVERTAS_SKIDMARK_SHADER_FILES
+    qml/shaders/skidmark.vert
+    qml/shaders/skidmark.frag)
+qt_add_resources(forevertas "skidmark-shader-sources"
+    PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
+    FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
 file(GLOB FOREVERTAS_REPLACEMENT_TEXTURES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/*.png")
 qt_add_resources(forevertas "replacement-materials"
@@ -650,6 +666,28 @@ if(BUILD_TESTING)
         forevertas_gui
         Qt6::Core)
 
+    add_executable(forevertas-skidmark-geometry-tests
+        tests/skidmark_geometry_tests.cpp)
+    target_link_libraries(forevertas-skidmark-geometry-tests PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Quick3D)
+
+    add_executable(forevertas-skidmark-shader-smoke
+        tests/skidmark_shader_smoke.cpp)
+    target_compile_definitions(forevertas-skidmark-shader-smoke PRIVATE
+        FOREVERTAS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(forevertas-skidmark-shader-smoke PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Quick3D)
+    qt_add_resources(forevertas-skidmark-shader-smoke
+        "skidmark-shader-smoke-resources"
+        PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
+        FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
+
     add_executable(forevertas-native-material-texture-tests
         tests/native_material_texture_tests.cpp)
     target_link_libraries(forevertas-native-material-texture-tests PRIVATE
@@ -677,6 +715,10 @@ if(BUILD_TESTING)
         target_compile_options(forevertas-renderer-capture PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-graphics-settings-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-skidmark-geometry-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-skidmark-shader-smoke PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-native-material-texture-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
@@ -706,11 +748,19 @@ if(BUILD_TESTING)
              COMMAND forevertas-renderer-tests)
     add_test(NAME forevertas-graphics-settings
              COMMAND forevertas-graphics-settings-tests)
+    add_test(NAME forevertas-skidmark-geometry
+             COMMAND forevertas-skidmark-geometry-tests)
+    if(WIN32)
+        add_test(NAME forevertas-skidmark-shader
+                 COMMAND forevertas-skidmark-shader-smoke)
+    endif()
     add_test(NAME forevertas-native-material-texture
              COMMAND forevertas-native-material-texture-tests)
     add_test(NAME forevertas-whiteboard
              COMMAND forevertas-whiteboard-tests)
     set_tests_properties(forevertas-renderer PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(forevertas-skidmark-geometry PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(forevertas-whiteboard PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

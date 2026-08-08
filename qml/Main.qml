@@ -31,6 +31,9 @@ ApplicationWindow {
     readonly property bool worldShadows: graphicsSettings
                                          ? graphicsSettings.worldShadows
                                          : false
+    readonly property bool skidmarksEnabled: !graphicsSettings
+                                              || graphicsSettings
+                                                    .skidmarksEnabled
     property real measuredFps: 0
     property int framesSinceSample: 0
     readonly property bool fpsSamplingEnabled:
@@ -57,6 +60,12 @@ ApplicationWindow {
         target: AppTheme
         property: "dark"
         value: window.controller.darkMode
+    }
+
+    Binding {
+        target: window.viewer
+        property: "skidmarksEnabled"
+        value: window.skidmarksEnabled
     }
 
     FrameAnimation {
@@ -2152,10 +2161,9 @@ ApplicationWindow {
                         visible: true
                         camera: viewCamera
 
-                            environment: SceneEnvironment {
+                        environment: SceneEnvironment {
                             objectName: "mapEnvironment"
-                            backgroundMode: SceneEnvironment.Color
-                            clearColor: "#7ea5c4"
+                            backgroundMode: SceneEnvironment.SkyBox
                             antialiasingMode: window.msaaSamples === 0
                                                   ? SceneEnvironment.NoAA
                                                   : SceneEnvironment.MSAA
@@ -2166,6 +2174,15 @@ ApplicationWindow {
                                          ? SceneEnvironment.TonemapModeNone
                                          : SceneEnvironment.TonemapModeAces
                             specularAAEnabled: !window.authoredLighting
+                            probeExposure: 1.0
+                            skyboxBlurAmount: 0.0
+
+                            lightProbe: Texture {
+                                objectName: "daySkyTexture"
+                                source: "qrc:/environment/day_sky.png"
+                                mappingMode: Texture.LightProbe
+                                generateMipmaps: true
+                            }
                         }
 
                         Node {
@@ -2367,6 +2384,129 @@ ApplicationWindow {
                             }
                         }
 
+                        // Vehicle visuals are kept separate from the static
+                        // map materials. The map remains authored/unlit while
+                        // the moving car can still pick up the neutral sky
+                        // probe instead of looking like a flat collision hull.
+                        Instantiator {
+                            id: vehicleVisualMaterialCache
+                            model: window.viewer.vehicleVisualMaterials
+
+                            delegate: PrincipledMaterial {
+                                required property var modelData
+
+                                objectName: "vehicleVisualMaterial"
+                                Texture {
+                                    id: vehicleBaseMap
+                                    objectName: "vehicleVisualBaseTexture"
+                                    source: modelData.baseTexture
+                                    tilingModeHorizontal: modelData.repeat
+                                                          ? Texture.Repeat
+                                                          : Texture.ClampToEdge
+                                    tilingModeVertical: modelData.repeat
+                                                        ? Texture.Repeat
+                                                        : Texture.ClampToEdge
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.albedoGenerateMipmaps
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: window.textureFiltering ===
+                                               "bilinear"
+                                               ? Texture.None : Texture.Linear
+                                }
+
+                                Texture {
+                                    id: vehicleNormalMap
+                                    source: modelData.normalTexture
+                                    tilingModeHorizontal:
+                                        vehicleBaseMap.tilingModeHorizontal
+                                    tilingModeVertical:
+                                        vehicleBaseMap.tilingModeVertical
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.normalGenerateMipmaps
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: vehicleBaseMap.mipFilter
+                                }
+
+                                Texture {
+                                    id: vehicleSpecularMap
+                                    source: modelData.specularTexture
+                                    tilingModeHorizontal:
+                                        vehicleBaseMap.tilingModeHorizontal
+                                    tilingModeVertical:
+                                        vehicleBaseMap.tilingModeVertical
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.specularGenerateMipmaps
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: vehicleBaseMap.mipFilter
+                                }
+
+                                lighting: modelData.unlit
+                                          ? PrincipledMaterial.NoLighting
+                                          : PrincipledMaterial.FragmentLighting
+                                baseColor: window.renderMode === "neutral"
+                                           ? "#aeb3af"
+                                           : (window.renderMode ===
+                                              "material-debug"
+                                              ? modelData.debugColor
+                                              : "#ffffff")
+                                baseColorMap: window.renderMode === "textured"
+                                              ? vehicleBaseMap : null
+                                roughness: window.renderMode === "neutral"
+                                           ? 0.74 : modelData.roughness
+                                metalness: window.renderMode === "neutral"
+                                           ? 0 : modelData.metalness
+                                normalMap: modelData.nativeNormal
+                                           ? vehicleNormalMap : null
+                                specularMap: modelData.nativeSpecular
+                                             ? vehicleSpecularMap : null
+                                alphaMode: modelData.alphaMode === "masked"
+                                           ? PrincipledMaterial.Mask
+                                           : (modelData.alphaMode === "blended"
+                                              || modelData.alphaMode ===
+                                                 "additive"
+                                              || modelData.alphaMode ===
+                                                 "subtractive"
+                                              ? PrincipledMaterial.Blend
+                                              : PrincipledMaterial.Opaque)
+                                blendMode: modelData.alphaMode === "additive"
+                                           ? PrincipledMaterial.Screen
+                                           : (modelData.alphaMode ===
+                                              "subtractive"
+                                              ? PrincipledMaterial.Multiply
+                                              : PrincipledMaterial.SourceOver)
+                                alphaCutoff: 0.5
+                                opacity: modelData.opacity
+                                cullMode: modelData.doubleSided
+                                          ? Material.NoCulling
+                                          : Material.BackFaceCulling
+                                vertexColorsEnabled:
+                                    modelData.vertexColors
+                                    && window.renderMode === "textured"
+                                emissiveMap: window.renderMode === "textured"
+                                             && (modelData.emissiveStrength > 0
+                                                 || modelData.unlit
+                                                 || modelData.alphaMode ===
+                                                    "additive")
+                                             ? vehicleBaseMap : null
+                                emissiveFactor: window.renderMode ===
+                                                "textured"
+                                                ? Qt.vector3d(
+                                                      modelData.emissiveStrength,
+                                                      modelData.emissiveStrength,
+                                                      modelData.emissiveStrength)
+                                                : Qt.vector3d(0, 0, 0)
+                            }
+                        }
+
                         Repeater3D {
                             model: window.viewer.visualBatches
 
@@ -2476,6 +2616,32 @@ ApplicationWindow {
                         }
 
                         Repeater3D {
+                            model: window.viewer.skidmarkPaths
+
+                            delegate: Model {
+                                required property var modelData
+
+                                objectName: "skidmarkModel"
+                                visible: window.viewer.loaded
+                                         && window.skidmarksEnabled
+                                         && modelData.runId ===
+                                            window.viewer.selectedRunId
+                                         && (window.renderMode === "textured"
+                                             || window.renderMode ===
+                                                "neutral")
+                                geometry: modelData.geometry
+                                castsShadows: false
+                                receivesShadows: false
+                                depthBias: -5
+
+                                materials: SkidmarkMaterial {
+                                    revealTimeSeconds:
+                                        window.viewer.timeMs / 1000.0
+                                }
+                            }
+                        }
+
+                        Repeater3D {
                             model: window.viewer.runCount
 
                             delegate: Node {
@@ -2490,6 +2656,47 @@ ApplicationWindow {
                                 visible: !runPose.selected
                                 position: runPose.position
                                 rotation: runPose.rotation
+
+                                Repeater3D {
+                                    model: window.viewer.vehicleVisualBatches
+
+                                    delegate: Model {
+                                        required property var modelData
+                                        readonly property int
+                                            materialBindingIndex:
+                                                modelData.materialBindingIndex
+                                        readonly property var sharedMaterial: {
+                                            const cacheSize =
+                                                vehicleVisualMaterialCache.count
+                                            return cacheSize > 0
+                                                   ? vehicleVisualMaterialCache
+                                                         .objectAt(
+                                                             materialBindingIndex)
+                                                   : null
+                                        }
+
+                                        objectName: "runCarVisualModel"
+                                        visible:
+                                            window.viewer.vehicleVisualAvailable
+                                            && window.renderMode !== "collision"
+                                            && window.renderMode !== "wireframe"
+                                            && modelData.defaultVisible
+                                            && modelData.materialVisible
+                                        geometry: modelData.geometry
+                                        castsShadows: !window.authoredLighting
+                                                      && window.worldShadows
+                                                      && modelData.alphaMode !==
+                                                         "blended"
+                                                      && modelData.alphaMode !==
+                                                         "additive"
+                                                      && modelData.alphaMode !==
+                                                         "subtractive"
+                                        receivesShadows:
+                                            !window.authoredLighting
+                                        materials: sharedMaterial
+                                                   ? [sharedMaterial] : []
+                                    }
+                                }
 
                                 Repeater3D {
                                     model: window.viewer.carEllipsoids.length
@@ -2507,8 +2714,13 @@ ApplicationWindow {
 
                                         Model {
                                             objectName: "runCarFilledModel"
-                                            visible: window.renderMode !==
-                                                     "wireframe"
+                                            visible:
+                                                window.renderMode !==
+                                                    "wireframe"
+                                                && (!window.viewer
+                                                         .vehicleVisualAvailable
+                                                    || window.renderMode ===
+                                                       "collision")
                                             geometry: window.viewer
                                                 .ellipsoidFilledGeometries[
                                                     runCarRoot.runIndex %
@@ -2562,6 +2774,46 @@ ApplicationWindow {
                             rotation: window.viewer.carRotation
 
                             Repeater3D {
+                                model: window.viewer.vehicleVisualBatches
+
+                                delegate: Model {
+                                    required property var modelData
+                                    readonly property int
+                                        materialBindingIndex:
+                                            modelData.materialBindingIndex
+                                    readonly property var sharedMaterial: {
+                                        const cacheSize =
+                                            vehicleVisualMaterialCache.count
+                                        return cacheSize > 0
+                                               ? vehicleVisualMaterialCache
+                                                     .objectAt(
+                                                         materialBindingIndex)
+                                               : null
+                                    }
+
+                                    objectName: "selectedRunCarVisualModel"
+                                    visible:
+                                        window.viewer.vehicleVisualAvailable
+                                        && window.renderMode !== "collision"
+                                        && window.renderMode !== "wireframe"
+                                        && modelData.defaultVisible
+                                        && modelData.materialVisible
+                                    geometry: modelData.geometry
+                                    castsShadows: !window.authoredLighting
+                                                  && window.worldShadows
+                                                  && modelData.alphaMode !==
+                                                     "blended"
+                                                  && modelData.alphaMode !==
+                                                     "additive"
+                                                  && modelData.alphaMode !==
+                                                     "subtractive"
+                                    receivesShadows: !window.authoredLighting
+                                    materials: sharedMaterial
+                                               ? [sharedMaterial] : []
+                                }
+                            }
+
+                            Repeater3D {
                                 model: window.viewer.carEllipsoids.length
 
                                 delegate: Node {
@@ -2576,8 +2828,12 @@ ApplicationWindow {
 
                                     Model {
                                         objectName: "selectedRunCarFilledModel"
-                                        visible: window.renderMode !==
-                                                 "wireframe"
+                                        visible:
+                                            window.renderMode !== "wireframe"
+                                            && (!window.viewer
+                                                     .vehicleVisualAvailable
+                                                || window.renderMode ===
+                                                   "collision")
                                         geometry: window.viewer
                                             .selectedEllipsoidFilledGeometry
                                         castsShadows: true
@@ -4299,6 +4555,16 @@ ApplicationWindow {
                             onToggled: checked => {
                                 if (window.graphicsSettings)
                                     window.graphicsSettings.worldShadows =
+                                        checked
+                            }
+                        }
+
+                        SettingSwitch {
+                            label: qsTr("Skidmarks")
+                            checked: window.skidmarksEnabled
+                            onToggled: checked => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings.skidmarksEnabled =
                                         checked
                             }
                         }
