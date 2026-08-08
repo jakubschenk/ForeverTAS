@@ -21,6 +21,7 @@ namespace {
 using forevertas::viewer::ComposeNativeAlbedo;
 using forevertas::viewer::DecodeNativeTexture;
 using forevertas::viewer::ApplyNativeAlbedoTransparency;
+using forevertas::viewer::NativeAlbedoAlphaUsage;
 using forevertas::viewer::NativeMaterialProfile;
 using forevertas::viewer::NativeTextureSemantic;
 using forevertas::viewer::PrepareNativeTexture;
@@ -291,6 +292,19 @@ bool TestResolveNativeMaterialProfile() {
     okay &= Check(selected.renderState.worldXz,
                   "world-XZ rule was not applied for exact matching");
 
+    PhysicsSandboxRenderMaterial vehicleMaterial;
+    PhysicsSandboxMaterialBitmap diffuseGloss;
+    diffuseGloss.samplerName = "Diffuse_Gloss";
+    diffuseGloss.textureAssetId = 41u;
+    vehicleMaterial.bitmaps = {diffuseGloss};
+    const NativeMaterialProfile vehicleProfile =
+            ResolveNativeMaterialProfile(vehicleMaterial);
+    okay &= Check(vehicleProfile.albedoBitmap == 0,
+                  "vehicle Diffuse_Gloss sampler was not selected as albedo");
+    okay &= Check(vehicleProfile.albedoAlphaUsage ==
+                          NativeAlbedoAlphaUsage::Specular,
+                  "vehicle Diffuse_Gloss alpha was not retained as gloss");
+
     material.shaderPath =
             "LEVEL/TECHNO/MEDIA/MATERIAL/PDIFF pdiff pa px2x";
     const NativeMaterialProfile nearMatch =
@@ -311,6 +325,28 @@ bool TestResolveNativeMaterialProfile() {
             "transparent rule did not enable blended alpha");
     okay &= Check(transparent.renderState.doubleSided,
                   "transparent rule did not mark material as double sided");
+    okay &= Check(transparent.albedoAlphaUsage ==
+                          NativeAlbedoAlphaUsage::Opacity,
+                  "transparent rule did not mark diffuse alpha as opacity");
+
+    material.shaderPath = "LEVEL/TECHNO/MEDIA/MATERIAL/TDIFFG PX2 CSpecL_Pixel";
+    NativeMaterialProfile specularAlpha =
+            ResolveNativeMaterialProfile(material);
+    okay &= Check(specularAlpha.albedoAlphaUsage ==
+                          NativeAlbedoAlphaUsage::Specular,
+                  "CSpecL_Pixel did not classify diffuse alpha as specular");
+    ApplyNativeAlbedoTransparency(true, true, &specularAlpha);
+    okay &= Check(specularAlpha.renderState.alphaMode ==
+                          StaticVisualAlphaMode::Opaque,
+                  "CSpecL_Pixel diffuse alpha incorrectly enabled blending");
+
+    material.shaderPath =
+            "LEVEL/TECHNO/MEDIA/MATERIAL/TDIFFG PX2 CSpecL_PixelExtra";
+    const NativeMaterialProfile specularNearMatch =
+            ResolveNativeMaterialProfile(material);
+    okay &= Check(specularNearMatch.albedoAlphaUsage ==
+                          NativeAlbedoAlphaUsage::Opacity,
+                  "near-miss CSpecL_Pixel shader suffix was accepted");
 
     material.water = true;
     const NativeMaterialProfile water = ResolveNativeMaterialProfile(material);
@@ -334,6 +370,13 @@ bool TestResolveNativeMaterialProfile() {
     okay &= Check(explicitBlend.renderState.alphaMode ==
                           StaticVisualAlphaMode::Blended,
                   "texture alpha should not override an explicit blend mode");
+
+    NativeMaterialProfile ignoredAlpha = selected;
+    ignoredAlpha.albedoAlphaUsage = NativeAlbedoAlphaUsage::Ignore;
+    ApplyNativeAlbedoTransparency(true, true, &ignoredAlpha);
+    okay &= Check(ignoredAlpha.renderState.alphaMode ==
+                          StaticVisualAlphaMode::Opaque,
+                  "explicitly ignored diffuse alpha enabled blending");
     return okay;
 }
 

@@ -1,5 +1,6 @@
 #include "viewer/material_classifier.h"
 #include "viewer/race_geometry.h"
+#include "viewer/race_viewer_controller.h"
 #include "viewer/ray_tracing_scene.h"
 #include "viewer/visual_scene_pipeline.h"
 
@@ -22,6 +23,7 @@
 namespace {
 
 using forevertas::viewer::ClassifyMaterial;
+using forevertas::viewer::HasRenderableVehicleVisual;
 using forevertas::viewer::MaterialSemanticContext;
 using forevertas::viewer::ReplacementFor;
 using forevertas::viewer::ReplacementMaterialClass;
@@ -41,6 +43,25 @@ bool Check(bool condition, const char *message) {
         std::cerr << message << '\n';
     }
     return condition;
+}
+
+bool TestVehicleVisualAvailability() {
+    const QVariantList materials{QVariantMap{}};
+    QVariantMap batch;
+    batch.insert(QStringLiteral("defaultVisible"), false);
+    batch.insert(QStringLiteral("materialVisible"), true);
+    bool okay = Check(!HasRenderableVehicleVisual({batch}, materials),
+                      "hidden vehicle batch suppressed its fallback");
+    batch.insert(QStringLiteral("defaultVisible"), true);
+    batch.insert(QStringLiteral("materialVisible"), false);
+    okay &= Check(!HasRenderableVehicleVisual({batch}, materials),
+                  "hidden vehicle material suppressed its fallback");
+    batch.insert(QStringLiteral("materialVisible"), true);
+    okay &= Check(HasRenderableVehicleVisual({batch}, materials),
+                  "visible vehicle batch did not enable native visuals");
+    okay &= Check(!HasRenderableVehicleVisual({batch}, {}),
+                  "vehicle visual without materials suppressed its fallback");
+    return okay;
 }
 
 PhysicsSandboxRenderMaterial Named(const char *name) {
@@ -1082,6 +1103,7 @@ bool TestRayTracingShaders() {
 int main(int argc, char **argv) {
     QGuiApplication application(argc, argv);
     bool okay = TestClassification();
+    okay &= TestVehicleVisualAvailability();
     okay &= TestReplacementParametersAndTextures();
     okay &= TestClipPlanesAndPurposeFiltering();
     okay &= TestStaticBatching();

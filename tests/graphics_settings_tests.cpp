@@ -42,6 +42,8 @@ bool TestDefaults() {
                   "textureFiltering default was not trilinear");
     okay &= Check(!settings.worldShadows(),
                   "worldShadows default was not false");
+    okay &= Check(settings.skidmarksEnabled(),
+                  "skidmarksEnabled default was not true");
     return okay;
 }
 
@@ -61,6 +63,7 @@ bool TestPersistence() {
         settings.setMsaaSamples(4);
         settings.setTextureFiltering(QStringLiteral("anisotropic"));
         settings.setWorldShadows(true);
+        settings.setSkidmarksEnabled(false);
     }
 
     QSettings restoredFile(path, QSettings::IniFormat);
@@ -79,6 +82,10 @@ bool TestPersistence() {
     okay &= Check(restoredFile.value(QStringLiteral("graphics/worldShadows"))
                                   .toBool() == true,
                   "worldShadows was not persisted");
+    okay &= Check(
+            !restoredFile.value(QStringLiteral("graphics/skidmarksEnabled"))
+                     .toBool(),
+            "skidmarksEnabled was not persisted");
 
     const GraphicsSettings restored(path);
     okay &= Check(restored.renderMode() == QStringLiteral("wireframe"),
@@ -91,6 +98,8 @@ bool TestPersistence() {
                   "textureFiltering was not restored");
     okay &= Check(restored.worldShadows(),
                   "worldShadows was not restored");
+    okay &= Check(!restored.skidmarksEnabled(),
+                  "skidmarksEnabled was not restored");
     return okay;
 }
 
@@ -110,6 +119,7 @@ bool TestInvalidRepairs() {
         damaged.setValue(QStringLiteral("graphics/textureFiltering"),
                          QStringLiteral("pixelated"));
         damaged.setValue(QStringLiteral("graphics/worldShadows"), 2);
+        damaged.setValue(QStringLiteral("graphics/skidmarksEnabled"), 2);
         damaged.sync();
     }
 
@@ -124,6 +134,8 @@ bool TestInvalidRepairs() {
                   "invalid textureFiltering was not repaired");
     okay &= Check(!repaired.worldShadows(),
                   "invalid worldShadows was not repaired");
+    okay &= Check(repaired.skidmarksEnabled(),
+                  "invalid skidmarksEnabled was not repaired");
 
     QSettings repairedFile(path, QSettings::IniFormat);
     okay &= Check(repairedFile.value(QStringLiteral("graphics/renderMode"))
@@ -141,6 +153,10 @@ bool TestInvalidRepairs() {
     okay &= Check(!repairedFile.value(QStringLiteral("graphics/worldShadows"))
                                   .toBool(),
                   "repaired worldShadows was not persisted");
+    okay &= Check(
+            repairedFile.value(QStringLiteral("graphics/skidmarksEnabled"))
+                    .toBool(),
+            "repaired skidmarksEnabled was not persisted");
     return okay;
 }
 
@@ -190,6 +206,7 @@ bool TestSignals() {
     int msaaChanges = 0;
     int filteringChanges = 0;
     int shadowChanges = 0;
+    int skidmarkChanges = 0;
 
     QObject::connect(&settings, &GraphicsSettings::renderModeChanged, [&]() {
         ++renderChanges;
@@ -207,6 +224,8 @@ bool TestSignals() {
     QObject::connect(&settings, &GraphicsSettings::worldShadowsChanged, [&]() {
         ++shadowChanges;
     });
+    QObject::connect(&settings, &GraphicsSettings::skidmarksEnabledChanged,
+                     [&]() { ++skidmarkChanges; });
 
     settings.setRenderMode(QStringLiteral("wireframe"));
     settings.setRenderMode(QStringLiteral("wireframe"));
@@ -218,6 +237,8 @@ bool TestSignals() {
     settings.setTextureFiltering(QStringLiteral("anisotropic"));
     settings.setWorldShadows(true);
     settings.setWorldShadows(true);
+    settings.setSkidmarksEnabled(false);
+    settings.setSkidmarksEnabled(false);
 
     bool okay = Check(renderChanges == 1, "renderModeChanged emitted twice");
     okay &= Check(lightingChanges == 1,
@@ -226,6 +247,8 @@ bool TestSignals() {
     okay &= Check(filteringChanges == 1,
                   "textureFilteringChanged emitted twice");
     okay &= Check(shadowChanges == 1, "worldShadowsChanged emitted twice");
+    okay &= Check(skidmarkChanges == 1,
+                  "skidmarksEnabledChanged emitted twice");
     return okay;
 }
 

@@ -92,6 +92,7 @@ SearchTimelineFrame ToTimelineFrame(
             view.totalLaps,
             view.raceCompleted,
             view.finishTimeMs,
+            view.respawnCount,
             view.car.linearSpeed.x,
             view.car.linearSpeed.y,
             view.car.linearSpeed.z,
@@ -104,7 +105,10 @@ SearchTimelineFrame ToTimelineFrame(
             view.car.wheelHasSurface,
             view.car.cameraSupportUp.x,
             view.car.cameraSupportUp.y,
-            view.car.cameraSupportUp.z};
+            view.car.cameraSupportUp.z,
+            view.car.wheelGroundPosition,
+            view.car.wheelSliding,
+            view.car.wheelSurface};
 }
 
 struct TimelineSamplingRuntime {

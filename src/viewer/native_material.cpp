@@ -22,16 +22,17 @@ struct ShaderRule {
     bool clamp = false;
     bool flipV = false;
     float opacity = 1.0f;
+    NativeAlbedoAlphaUsage albedoAlphaUsage = NativeAlbedoAlphaUsage::Ignore;
 };
 
-constexpr std::array<std::string_view, 13> AlbedoPriority{{
-        "diffuse", "blend1", "panorama", "advert", "glow", "soil",
-        "grass", "foam1", "gdiffuse", "pxzdiffuse", "pydiffuse",
+constexpr std::array<std::string_view, 14> AlbedoPriority{{
+        "diffuse", "diffusegloss", "blend1", "panorama", "advert", "glow",
+        "soil", "grass", "foam1", "gdiffuse", "pxzdiffuse", "pydiffuse",
         "basecolor", "pxzbasecolor"}};
 
 // Interoperability table expressed independently from the observed gbx3d
 // behavior. Matching is case/slash-insensitive and accepts archive prefixes.
-constexpr std::array<ShaderRule, 40> ShaderRules{{
+constexpr std::array<ShaderRule, 41> ShaderRules{{
         {"techno/media/material/pdiff pdiff pa px2", true},
         {"techno2/media/material/pdiff pdiff pa px2 grass2", true},
         {"techno2/media/material/pdiff pdiff pa tocc px2 grass", true},
@@ -47,8 +48,12 @@ constexpr std::array<ShaderRule, 40> ShaderRules{{
          false, true, true},
         {"techno/media/material/pdiff fresnel px2", true},
         {"techno/media/material/sky", false, false, false, true},
+        {"techno/media/material/tdiffg px2 cspecl_pixel", false, false, false,
+         false, false, false, false, false, false, false, 1.0f,
+         NativeAlbedoAlphaUsage::Specular},
         {"vehicles/media/material/sportcarglass", false, true, false,
-         false, false, false, false, false, false, false, 0.89f},
+         false, false, false, false, false, false, false, 0.89f,
+         NativeAlbedoAlphaUsage::Opacity},
         {"techno/media/material/tadd", false, true, false, false, true},
         {"techno/media/material/tadd zbias", false, true, false, false, true},
         {"techno/media/material/tadd night", false, true, false, false, true},
@@ -143,6 +148,12 @@ void ApplyRule(const ShaderRule &rule, NativeMaterialProfile *profile) {
     profile->repeat &= !rule.clamp;
     profile->flipV |= rule.flipV;
     profile->opacity = std::min(profile->opacity, rule.opacity);
+    if (rule.albedoAlphaUsage != NativeAlbedoAlphaUsage::Ignore) {
+        profile->albedoAlphaUsage = rule.albedoAlphaUsage;
+    } else if (rule.transparent &&
+               profile->albedoAlphaUsage == NativeAlbedoAlphaUsage::Ignore) {
+        profile->albedoAlphaUsage = NativeAlbedoAlphaUsage::Opacity;
+    }
     if (rule.subtractive) {
         profile->renderState.alphaMode = StaticVisualAlphaMode::Subtractive;
     } else if (rule.additive) {
@@ -193,7 +204,12 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     profile.renderState.alphaMode = StaticVisualAlphaMode::Opaque;
     for (std::string_view sampler : AlbedoPriority) {
         profile.albedoBitmap = FindSampler(material, sampler);
-        if (profile.albedoBitmap >= 0) break;
+        if (profile.albedoBitmap >= 0) {
+            if (sampler == "diffusegloss") {
+                profile.albedoAlphaUsage = NativeAlbedoAlphaUsage::Specular;
+            }
+            break;
+        }
     }
     profile.normalBitmap = FindSampler(material, "normal");
     profile.specularBitmap =
@@ -206,6 +222,7 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     if (material.water) {
         profile.renderState.alphaMode = StaticVisualAlphaMode::Blended;
         profile.renderState.doubleSided = true;
+        profile.albedoAlphaUsage = NativeAlbedoAlphaUsage::Opacity;
     }
 
     const std::string shader = Normalize(material.shaderPath);
@@ -218,6 +235,7 @@ void ApplyNativeAlbedoTransparency(bool hasTransparency,
                                    bool hasPartialTransparency,
                                    NativeMaterialProfile *profile) {
     if (profile == nullptr || !hasTransparency ||
+        profile->albedoAlphaUsage != NativeAlbedoAlphaUsage::Opacity ||
         profile->renderState.alphaMode != StaticVisualAlphaMode::Opaque) {
         return;
     }

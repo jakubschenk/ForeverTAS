@@ -4,6 +4,7 @@
 #include "physics_backend.h"
 #include "searches/search_algorithm.h"
 #include "viewer/race_geometry.h"
+#include "viewer/skidmark_geometry.h"
 #include "viewer/simulation_debugger_model.h"
 #include "viewer/whiteboard_model.h"
 #include "viewer/ray_tracing_scene.h"
@@ -33,6 +34,9 @@ class ManualDriveRuntime;
 class RaceCameraResources;
 class RaceCameraRuntime;
 
+bool HasRenderableVehicleVisual(const QVariantList &batches,
+                                const QVariantList &materials);
+
 struct RaceViewerFrame {
     std::int64_t timeMs = 0;
     QVector3D position{};
@@ -46,6 +50,7 @@ struct RaceViewerFrame {
     std::uint32_t totalLaps = 1u;
     bool raceCompleted = false;
     std::optional<std::uint32_t> finishTimeMs;
+    std::uint32_t respawnCount = 0u;
     QVector3D linearSpeed{};
     float signedSpeed = 0.0f;
     float turbo = 0.0f;
@@ -55,6 +60,10 @@ struct RaceViewerFrame {
     std::array<bool, 4> wheelContact{{true, true, true, true}};
     std::array<bool, 4> wheelHasSurface{{true, true, true, true}};
     QVector3D cameraSupportUp{0.0f, 1.0f, 0.0f};
+    std::array<QVector3D, 4> wheelGroundPosition{};
+    std::array<bool, 4> wheelSliding{{false, false, false, false}};
+    std::array<std::uint16_t, 4> wheelSurface{{0xffffu, 0xffffu,
+                                               0xffffu, 0xffffu}};
 };
 
 struct RaceViewerSplit {
@@ -78,6 +87,8 @@ struct RaceViewerRun {
     QQuaternion rotation{};
     std::vector<RaceViewerSplit> checkpointSplits;
     std::shared_ptr<ManualDriveRuntime> runtime;
+    std::unique_ptr<SkidmarkGeometry> skidmarkGeometry;
+    std::int64_t skidmarkBuiltThroughTimeMs = -1;
 };
 
 struct RaceViewerMeshBuffers {
@@ -95,9 +106,12 @@ struct RaceViewerLoadResult {
     QString mapName;
     RaceViewerMeshBuffers track;
     std::vector<StaticVisualBatch> visualBatches;
+    std::vector<StaticVisualBatch> vehicleVisualBatches;
     std::shared_ptr<const RayTracingSceneData> rayTracingScene;
     QVariantList visualMaterials;
     QVariantList visualBatchItems;
+    QVariantList vehicleVisualMaterials;
+    QVariantList vehicleVisualBatchItems;
     QVariantMap renderTelemetry;
     QVector3D visualBoundsMin{};
     QVector3D visualBoundsMax{};
@@ -146,10 +160,22 @@ class RaceViewerController final : public QObject {
             QVariantList visualBatches READ visualBatches NOTIFY sceneChanged)
     Q_PROPERTY(QVariantList visualMaterials READ visualMaterials NOTIFY
                        sceneChanged)
+    Q_PROPERTY(QVariantList vehicleVisualBatches READ vehicleVisualBatches
+                       NOTIFY sceneChanged)
+    Q_PROPERTY(QVariantList vehicleVisualMaterials READ
+                       vehicleVisualMaterials NOTIFY sceneChanged)
+    Q_PROPERTY(bool vehicleVisualAvailable READ vehicleVisualAvailable NOTIFY
+                       sceneChanged)
     Q_PROPERTY(QVariantList trajectoryPaths READ trajectoryPaths NOTIFY
                        trajectoriesChanged)
     Q_PROPERTY(qint64 trajectoryCount READ trajectoryCount NOTIFY
                        trajectoriesChanged)
+    Q_PROPERTY(QVariantList skidmarkPaths READ skidmarkPaths NOTIFY
+                       skidmarksChanged)
+    Q_PROPERTY(qint64 skidmarkCount READ skidmarkCount NOTIFY
+                       skidmarksChanged)
+    Q_PROPERTY(bool skidmarksEnabled READ skidmarksEnabled WRITE
+                       setSkidmarksEnabled NOTIFY skidmarksEnabledChanged)
     Q_PROPERTY(QString previewInputScript READ previewInputScript WRITE
                        setPreviewInputScript NOTIFY previewInputScriptChanged)
     Q_PROPERTY(qint64 simulationHorizonMs READ simulationHorizonMs WRITE
@@ -248,8 +274,15 @@ public:
     QVariantList visualInstances() const;
     QVariantList visualBatches() const;
     QVariantList visualMaterials() const;
+    QVariantList vehicleVisualBatches() const;
+    QVariantList vehicleVisualMaterials() const;
+    bool vehicleVisualAvailable() const;
     QVariantList trajectoryPaths() const;
     qint64 trajectoryCount() const;
+    QVariantList skidmarkPaths() const;
+    qint64 skidmarkCount() const;
+    bool skidmarksEnabled() const;
+    void setSkidmarksEnabled(bool value);
     QString previewInputScript() const;
     qint64 simulationHorizonMs() const;
     QVariantList runOptions() const;
@@ -386,6 +419,8 @@ signals:
     void runsChanged();
     void selectedRunChanged();
     void trajectoriesChanged();
+    void skidmarksChanged();
+    void skidmarksEnabledChanged();
     void previewInputScriptChanged();
     void simulationHorizonMsChanged();
     void cameraPresetChanged();
@@ -432,6 +467,8 @@ private:
                    std::vector<SandboxInputEvent> inputs,
                    bool select,
                    std::shared_ptr<ManualDriveRuntime> runtime = nullptr);
+    void rebuildSkidmarks(RaceViewerRun &run);
+    void rebuildLiveSkidmarks(RaceViewerRun &run);
     const RaceViewerRun *selectedRun() const noexcept;
     RaceViewerRun *selectedRun() noexcept;
     QQuick3DGeometry *ellipsoidFilledGeometryForRun(int runIndex);
@@ -456,6 +493,7 @@ private:
     RaceGeometry trackWireGeometry_;
     WhiteboardModel whiteboard_;
     std::vector<std::unique_ptr<RaceGeometry>> visualGeometries_;
+    std::vector<std::unique_ptr<RaceGeometry>> vehicleVisualGeometries_;
     std::shared_ptr<const RayTracingSceneData> rayTracingScene_;
     std::vector<std::unique_ptr<RaceGeometry>>
             ellipsoidFilledGeometries_;
@@ -488,6 +526,8 @@ private:
     QVariantList carEllipsoids_;
     QVariantList visualBatches_;
     QVariantList visualMaterials_;
+    QVariantList vehicleVisualBatches_;
+    QVariantList vehicleVisualMaterials_;
     QVariantMap renderTelemetry_;
     QVariantList trajectoryPaths_;
     RaceGeometry inputPreviewGeometry_;
@@ -502,6 +542,7 @@ private:
     double carCameraFieldOfView_ = 75.0;
     int cameraPreset_ = 1;
     bool carCameraAvailable_ = false;
+    bool skidmarksEnabled_ = true;
     QString telemetryScript_;
     QString statusText_ = QStringLiteral("No map loaded");
     QString selectedRunId_;

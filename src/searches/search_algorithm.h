@@ -69,6 +69,7 @@ struct SearchTimelineFrame {
     std::uint32_t totalLaps = 1u;
     bool raceCompleted = false;
     std::optional<std::uint32_t> finishTimeMs;
+    std::uint32_t respawnCount = 0u;
     float linearSpeedX = 0.0f;
     float linearSpeedY = 0.0f;
     float linearSpeedZ = 0.0f;
@@ -82,6 +83,10 @@ struct SearchTimelineFrame {
     float cameraSupportUpX = 0.0f;
     float cameraSupportUpY = 1.0f;
     float cameraSupportUpZ = 0.0f;
+    std::array<forevervalidator::Vector3, 4> wheelGroundPosition{};
+    std::array<bool, 4> wheelSliding{{false, false, false, false}};
+    std::array<std::uint16_t, 4> wheelSurface{{0xffffu, 0xffffu,
+                                               0xffffu, 0xffffu}};
 };
 
 struct SearchLiveUpdate {

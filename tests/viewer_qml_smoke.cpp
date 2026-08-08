@@ -5719,9 +5719,67 @@ int main(int argc, char **argv) {
                                                                          "ws")
                                                                     .toBool();
                                                 });
+                                const auto enumPropertyKey =
+                                        [](const QObject *object,
+                                           const char *propertyName) {
+                                            if (object == nullptr) {
+                                                return QByteArray{};
+                                            }
+                                            const QMetaObject *metaObject =
+                                                    object->metaObject();
+                                            const int propertyIndex =
+                                                    metaObject->indexOfProperty(
+                                                            propertyName);
+                                            if (propertyIndex < 0) {
+                                                return QByteArray{};
+                                            }
+                                            const QMetaProperty property =
+                                                    metaObject->property(
+                                                            propertyIndex);
+                                            const char *const key =
+                                                    property.enumerator()
+                                                            .valueToKey(
+                                                                    object->property(
+                                                                                  propertyName)
+                                                                            .toInt());
+                                            return key != nullptr
+                                                    ? QByteArray(key)
+                                                    : QByteArray{};
+                                        };
+                                const QUrl skySource = daySkyTexture != nullptr
+                                        ? daySkyTexture->property("source")
+                                                  .toUrl()
+                                        : QUrl{};
+                                const QByteArray backgroundModeName =
+                                        enumPropertyKey(mapEnvironment,
+                                                        "backgroundMode");
+                                const QByteArray mappingModeName =
+                                        enumPropertyKey(daySkyTexture,
+                                                        "mappingMode");
                                 const bool daylightEnvironment =
                                         mapEnvironment != nullptr &&
-                                        daySkyTexture == nullptr &&
+                                        daySkyTexture != nullptr &&
+                                        backgroundModeName ==
+                                                QByteArrayLiteral("SkyBox") &&
+                                        mappingModeName ==
+                                                QByteArrayLiteral("LightProbe") &&
+                                        daySkyTexture->property(
+                                                         "generateMipmaps")
+                                                .toBool() &&
+                                        mapEnvironment->property(
+                                                              "probeExposure")
+                                                        .toDouble() >= 0.8 &&
+                                        mapEnvironment->property(
+                                                              "skyboxBlurAmount")
+                                                        .toDouble() == 0.0 &&
+                                        mapEnvironment->property("lightProbe")
+                                                        .value<QObject *>() ==
+                                                daySkyTexture &&
+                                        skySource.scheme() ==
+                                                QStringLiteral("qrc") &&
+                                        skySource.path() ==
+                                                QStringLiteral(
+                                                        "/environment/day_sky.png") &&
                                         mainMapLight != nullptr &&
                                         fillMapLight != nullptr &&
                                         !mainMapLight->property("visible")

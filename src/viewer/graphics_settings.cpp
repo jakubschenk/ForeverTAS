@@ -13,11 +13,14 @@ constexpr char kMsaaSamplesKey[] = "graphics/msaaSamples";
 constexpr char kTextureFilteringKey[] = "graphics/textureFiltering";
 constexpr char kWorldShadowsKey[] = "graphics/worldShadows";
 
+constexpr char kSkidmarksEnabledKey[] = "graphics/skidmarksEnabled";
+
 constexpr char kDefaultRenderMode[] = "textured";
 constexpr char kDefaultLightingMode[] = "authored";
 constexpr char kDefaultTextureFiltering[] = "trilinear";
 constexpr int kDefaultMsaaSamples = 2;
 constexpr bool kDefaultWorldShadows = false;
+constexpr bool kDefaultSkidmarksEnabled = true;
 constexpr char kRenderModeMigrationValue[] = "textured-rt";
 constexpr char kRenderModeNeutral[] = "neutral";
 constexpr char kRenderModeMaterialDebug[] = "material-debug";
@@ -85,6 +88,10 @@ bool GraphicsSettings::worldShadows() const {
     return worldShadows_;
 }
 
+bool GraphicsSettings::skidmarksEnabled() const {
+    return skidmarksEnabled_;
+}
+
 void GraphicsSettings::setRenderMode(const QString &value) {
     bool repaired = false;
     const QString repairedValue = RenderModeFromString(value, &repaired);
@@ -150,8 +157,17 @@ void GraphicsSettings::setWorldShadows(bool value) {
     Persist(QString::fromLatin1(kWorldShadowsKey), worldShadows_);
 }
 
+void GraphicsSettings::setSkidmarksEnabled(bool value) {
+    if (value == skidmarksEnabled_) {
+        return;
+    }
+    skidmarksEnabled_ = value;
+    emit skidmarksEnabledChanged();
+    Persist(QString::fromLatin1(kSkidmarksEnabledKey), skidmarksEnabled_);
+}
+
 QString GraphicsSettings::RenderModeFromString(const QString &value,
-                                              bool *repaired) {
+                                                bool *repaired) {
     if (value == QString::fromLatin1(kRenderModeMigrationValue)) {
         *repaired = true;
         return QString::fromLatin1(kDefaultRenderMode);
@@ -229,6 +245,35 @@ bool GraphicsSettings::WorldShadowsFromValue(const QVariant &value,
     return kDefaultWorldShadows;
 }
 
+bool GraphicsSettings::SkidmarksEnabledFromValue(const QVariant &value,
+                                                  bool *repaired) {
+    if (value.userType() == QMetaType::Bool) {
+        *repaired = false;
+        return value.toBool();
+    }
+    bool converted = false;
+    const int integer = value.toInt(&converted);
+    if (converted && (integer == 0 || integer == 1)) {
+        *repaired = false;
+        return integer != 0;
+    }
+    if (value.userType() == QMetaType::QString) {
+        const QString text = value.toString().toLower();
+        if (text == QStringLiteral("false") || text == QStringLiteral("0") ||
+            text == QStringLiteral("no") || text == QStringLiteral("off")) {
+            *repaired = false;
+            return false;
+        }
+        if (text == QStringLiteral("true") || text == QStringLiteral("1") ||
+            text == QStringLiteral("yes") || text == QStringLiteral("on")) {
+            *repaired = false;
+            return true;
+        }
+    }
+    *repaired = true;
+    return kDefaultSkidmarksEnabled;
+}
+
 void GraphicsSettings::Load() {
     QSettings settings = OpenSettings(settingsFile_);
     bool renderModeRepaired = false;
@@ -236,6 +281,7 @@ void GraphicsSettings::Load() {
     bool msaaSamplesRepaired = false;
     bool textureFilteringRepaired = false;
     bool worldShadowsRepaired = false;
+    bool skidmarksEnabledRepaired = false;
 
     renderMode_ = RenderModeFromString(
             settings.value(QString::fromLatin1(kRenderModeKey),
@@ -260,10 +306,14 @@ void GraphicsSettings::Load() {
             settings.value(QString::fromLatin1(kWorldShadowsKey),
                            kDefaultWorldShadows),
             &worldShadowsRepaired);
+    skidmarksEnabled_ = SkidmarksEnabledFromValue(
+            settings.value(QString::fromLatin1(kSkidmarksEnabledKey),
+                           kDefaultSkidmarksEnabled),
+            &skidmarksEnabledRepaired);
 
     const bool repaired = renderModeRepaired || lightingModeRepaired ||
             msaaSamplesRepaired || textureFilteringRepaired ||
-            worldShadowsRepaired;
+            worldShadowsRepaired || skidmarksEnabledRepaired;
     if (repaired) {
         Persist();
     }
@@ -275,6 +325,7 @@ void GraphicsSettings::Persist() const {
     Persist(QString::fromLatin1(kMsaaSamplesKey), msaaSamples_);
     Persist(QString::fromLatin1(kTextureFilteringKey), textureFiltering_);
     Persist(QString::fromLatin1(kWorldShadowsKey), worldShadows_);
+    Persist(QString::fromLatin1(kSkidmarksEnabledKey), skidmarksEnabled_);
 }
 
 void GraphicsSettings::Persist(const QString &key, const QString &value) const {

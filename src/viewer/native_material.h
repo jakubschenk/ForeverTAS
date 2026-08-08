@@ -9,6 +9,15 @@
 
 namespace forevertas::viewer {
 
+// Legacy diffuse textures may store opacity, an alpha-test mask, or material
+// data such as specular strength in the same channel. The shader, not the DDS
+// pixel values alone, determines how that channel is interpreted.
+enum class NativeAlbedoAlphaUsage {
+    Ignore,
+    Opacity,
+    Specular,
+};
+
 struct NativeMaterialProfile {
     int albedoBitmap = -1;
     int normalBitmap = -1;
@@ -17,6 +26,7 @@ struct NativeMaterialProfile {
     int blendMaskBitmap = -1;
     int blend3Bitmap = -1;
     StaticVisualMaterialState renderState{};
+    NativeAlbedoAlphaUsage albedoAlphaUsage = NativeAlbedoAlphaUsage::Opacity;
     float opacity = 1.0f;
     bool worldXz = false;
     bool unlit = false;

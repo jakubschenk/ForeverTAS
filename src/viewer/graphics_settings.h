@@ -21,6 +21,8 @@ class GraphicsSettings final : public QObject {
                        setTextureFiltering NOTIFY textureFilteringChanged)
     Q_PROPERTY(bool worldShadows READ worldShadows WRITE setWorldShadows NOTIFY
                        worldShadowsChanged)
+    Q_PROPERTY(bool skidmarksEnabled READ skidmarksEnabled WRITE
+                       setSkidmarksEnabled NOTIFY skidmarksEnabledChanged)
 
 public:
     explicit GraphicsSettings(QObject *parent = nullptr);
@@ -31,12 +33,14 @@ public:
     int msaaSamples() const;
     QString textureFiltering() const;
     bool worldShadows() const;
+    bool skidmarksEnabled() const;
 
     void setRenderMode(const QString &value);
     void setLightingMode(const QString &value);
     void setMsaaSamples(int value);
     void setTextureFiltering(const QString &value);
     void setWorldShadows(bool value);
+    void setSkidmarksEnabled(bool value);
 
 signals:
     void renderModeChanged();
@@ -44,15 +48,18 @@ signals:
     void msaaSamplesChanged();
     void textureFilteringChanged();
     void worldShadowsChanged();
+    void skidmarksEnabledChanged();
 
 private:
     static QString RenderModeFromString(const QString &value, bool *repaired);
     static QString LightingModeFromString(const QString &value, bool *repaired);
     static int MsaaSamplesFromValue(const QVariant &value, bool *repaired);
     static QString TextureFilteringFromString(const QString &value,
-                                            bool *repaired);
+                                              bool *repaired);
     static bool WorldShadowsFromValue(const QVariant &value,
-                                     bool *repaired);
+                                      bool *repaired);
+    static bool SkidmarksEnabledFromValue(const QVariant &value,
+                                          bool *repaired);
     void Load();
     void Persist() const;
     void Persist(const QString &key, const QString &value) const;
@@ -65,6 +72,7 @@ private:
     int msaaSamples_ = 2;
     QString textureFiltering_ = QStringLiteral("trilinear");
     bool worldShadows_ = false;
+    bool skidmarksEnabled_ = true;
 };
 
 }  // namespace forevertas::viewer
