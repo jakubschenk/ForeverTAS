@@ -184,10 +184,10 @@ reduced opacity.
 
 The viewport is a textured Qt Quick 3D raster renderer. It resolves the game
 textures already installed below the selected Packs directory, caches
-Qt-compatible copies locally, and defaults to authored/baked lighting so the
-map is not relit a second time. Dynamic lighting and shadows remain optional
-graphics settings. The experimental compute ray tracer is not part of the app
-build or render-mode menu.
+Qt-compatible copies locally, and defaults to a low-energy static sun and sky
+fill over the authored diffuse textures. Dynamic normal/specular lighting and
+world shadows remain optional graphics settings. The experimental compute ray
+tracer is not part of the app build or render-mode menu.
 
 The viewer's **Whiteboard** mode draws directly over either renderer without
 replacing the map, cars, targets, or trajectories. Pen strokes, lines,

@@ -772,6 +772,8 @@ int main(int argc, char **argv) {
                           viewer.visualTriangleCount()},
                          {QStringLiteral("materials"),
                           viewer.materialCount()}}},
+            {QStringLiteral("rendererTelemetry"),
+             QJsonObject::fromVariantMap(viewer.rendererTelemetry())},
             {QStringLiteral("image"),
              QJsonObject{{QStringLiteral("minimumLuminance"),
                           statistics.minimumLuminance},

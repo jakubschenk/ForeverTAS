@@ -68,7 +68,7 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 FetchContent_Declare(
     ForeverValidator
     GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
-    GIT_TAG 53ca9bc113f75d6764b5948baf53e8ac6d3519a7
+    GIT_TAG 3ae3b86b2fa86c5c76ebf0d036d9c4cf1527b55b
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
@@ -344,6 +344,7 @@ qt_add_qml_module(forevertas
         qml/AppTheme.qml
         qml/Main.qml
         qml/SkidmarkMaterial.qml
+        qml/TrajectoryMaterial.qml
         qml/SimulationDebuggerPanel.qml
         qml/SliderValueField.qml
         qml/ThemedButton.qml
@@ -392,6 +393,18 @@ set(FOREVERTAS_SKIDMARK_SHADER_FILES
 qt_add_resources(forevertas "skidmark-shader-sources"
     PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
     FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
+set_source_files_properties(qml/shaders/trajectory.vert
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/trajectory.vert")
+set_source_files_properties(qml/shaders/trajectory.frag
+    PROPERTIES QT_RESOURCE_ALIAS "shaders/trajectory.frag")
+set(FOREVERTAS_TRAJECTORY_SHADER_RESOURCE_PREFIX
+    "/qt/qml/ForeverTAS/qml")
+set(FOREVERTAS_TRAJECTORY_SHADER_FILES
+    qml/shaders/trajectory.vert
+    qml/shaders/trajectory.frag)
+qt_add_resources(forevertas "trajectory-shader-sources"
+    PREFIX "${FOREVERTAS_TRAJECTORY_SHADER_RESOURCE_PREFIX}"
+    FILES ${FOREVERTAS_TRAJECTORY_SHADER_FILES})
 file(GLOB FOREVERTAS_REPLACEMENT_TEXTURES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/materials/*.png")
 qt_add_resources(forevertas "replacement-materials"
@@ -687,6 +700,10 @@ if(BUILD_TESTING)
         "skidmark-shader-smoke-resources"
         PREFIX "${FOREVERTAS_SKIDMARK_SHADER_RESOURCE_PREFIX}"
         FILES ${FOREVERTAS_SKIDMARK_SHADER_FILES})
+    qt_add_resources(forevertas-skidmark-shader-smoke
+        "trajectory-shader-smoke-resources"
+        PREFIX "${FOREVERTAS_TRAJECTORY_SHADER_RESOURCE_PREFIX}"
+        FILES ${FOREVERTAS_TRAJECTORY_SHADER_FILES})
 
     add_executable(forevertas-native-material-texture-tests
         tests/native_material_texture_tests.cpp)
@@ -753,6 +770,8 @@ if(BUILD_TESTING)
     if(WIN32)
         add_test(NAME forevertas-skidmark-shader
                  COMMAND forevertas-skidmark-shader-smoke)
+        add_test(NAME forevertas-trajectory-shader
+                 COMMAND forevertas-skidmark-shader-smoke --trajectory)
     endif()
     add_test(NAME forevertas-native-material-texture
              COMMAND forevertas-native-material-texture-tests)
@@ -885,6 +904,25 @@ if(BUILD_TESTING)
                      "${FOREVERTAS_TEST_REPLAY}")
         set_tests_properties(forevertas-render-scene-data PROPERTIES
             TIMEOUT 180)
+
+        if(WIN32)
+            add_test(NAME forevertas-renderer-capture-d3d11
+                     COMMAND forevertas-renderer-capture
+                         --packs "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                         --replay "${FOREVERTAS_TEST_REPLAY}"
+                         --output
+                             "${CMAKE_CURRENT_BINARY_DIR}/renderer-capture-smoke.png"
+                         --mode textured
+                         --tick-fraction 0.5
+                         --size 640x360)
+            set_tests_properties(
+                forevertas-renderer-capture-d3d11 PROPERTIES
+                ENVIRONMENT
+                    "QT_SCALE_FACTOR=1;QT_ENABLE_HIGHDPI_SCALING=0"
+                LABELS "renderer;d3d11;fixture"
+                RUN_SERIAL TRUE
+                TIMEOUT 180)
+        endif()
 
         add_executable(forevertas-viewer-reload-smoke
             tests/viewer_reload_smoke.cpp)

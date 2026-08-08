@@ -13,7 +13,10 @@ namespace {
 
 static_assert(sizeof(SkidmarkVertexData) == 11u * sizeof(float));
 
-constexpr float kSurfaceOffset = 0.008f;
+// Contact positions sit on the collision plane while authored road visuals can
+// be a few millimetres above it. A 12 mm normal offset is still visually flush
+// at driving scale but survives that collision/render height disagreement.
+constexpr float kSurfaceOffset = 0.012f;
 constexpr float kMinimumTireWidth = 0.075f;
 constexpr float kMaximumTireWidth = 0.16f;
 constexpr float kTreadRepeatMetres = 0.24f;

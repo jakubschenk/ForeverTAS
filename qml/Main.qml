@@ -2170,11 +2170,14 @@ ApplicationWindow {
                             antialiasingQuality: window.msaaSamples >= 4
                                                      ? SceneEnvironment.High
                                                      : SceneEnvironment.Medium
+                            // Linear tonemapping performs the required linear
+                            // to sRGB conversion without the low-contrast film
+                            // curve that washes out authored stadium colors.
                             tonemapMode: window.authoredLighting
-                                         ? SceneEnvironment.TonemapModeNone
+                                         ? SceneEnvironment.TonemapModeLinear
                                          : SceneEnvironment.TonemapModeAces
                             specularAAEnabled: !window.authoredLighting
-                            probeExposure: 1.0
+                            probeExposure: window.authoredLighting ? 0.6 : 1.0
                             skyboxBlurAmount: 0.0
 
                             lightProbe: Texture {
@@ -2234,19 +2237,20 @@ ApplicationWindow {
                             objectName: "mainMapLight"
                             eulerRotation.x: -52
                             eulerRotation.y: -32
-                            brightness: 1.15
+                            brightness: window.authoredLighting ? 0.55 : 1.15
                             color: "#fff3d7"
-                            visible: !window.authoredLighting
-                            castsShadow: window.worldShadows
+                            visible: true
+                            castsShadow: !window.authoredLighting
+                                         && window.worldShadows
                         }
 
                         DirectionalLight {
                             objectName: "fillMapLight"
                             eulerRotation.x: -20
                             eulerRotation.y: 145
-                            brightness: 0.35
+                            brightness: window.authoredLighting ? 0.12 : 0.35
                             color: "#b9dbf2"
-                            visible: !window.authoredLighting
+                            visible: true
                             castsShadow: false
                         }
 
@@ -2276,7 +2280,7 @@ ApplicationWindow {
                                     magFilter: Texture.Linear
                                     mipFilter: window.textureFiltering ===
                                                "bilinear"
-                                               ? Texture.None : Texture.Linear
+                                               ? Texture.Nearest : Texture.Linear
                                 }
 
                                 Texture {
@@ -2311,10 +2315,9 @@ ApplicationWindow {
                                     mipFilter: replacementBaseMap.mipFilter
                                 }
 
-                                lighting:
-                                    window.authoredLighting || modelData.unlit
-                                    ? PrincipledMaterial.NoLighting
-                                    : PrincipledMaterial.FragmentLighting
+                                lighting: modelData.unlit
+                                          ? PrincipledMaterial.NoLighting
+                                          : PrincipledMaterial.FragmentLighting
                                 baseColor: window.renderMode ===
                                            "neutral"
                                            ? "#aeb3af"
@@ -2414,7 +2417,7 @@ ApplicationWindow {
                                     magFilter: Texture.Linear
                                     mipFilter: window.textureFiltering ===
                                                "bilinear"
-                                               ? Texture.None : Texture.Linear
+                                               ? Texture.Nearest : Texture.Linear
                                 }
 
                                 Texture {
@@ -2606,11 +2609,10 @@ ApplicationWindow {
                                 geometry: modelData.geometry
                                 castsShadows: false
                                 receivesShadows: false
-                                materials: DefaultMaterial {
-                                    lighting: DefaultMaterial.NoLighting
-                                    diffuseColor: modelData.color
-                                    opacity: modelData.opacity
-                                    cullMode: Material.NoCulling
+                                materials: TrajectoryMaterial {
+                                    objectName: "trajectoryPathMaterial"
+                                    trajectoryColor: modelData.color
+                                    trajectoryOpacity: modelData.opacity
                                 }
                             }
                         }
@@ -2945,11 +2947,11 @@ ApplicationWindow {
                                 geometry: modelData.geometry
                                 castsShadows: false
                                 receivesShadows: false
-                                materials: DefaultMaterial {
-                                    lighting: DefaultMaterial.NoLighting
-                                    diffuseColor: modelData.color
-                                    opacity: modelData.opacity
-                                    cullMode: Material.NoCulling
+                                materials: TrajectoryMaterial {
+                                    objectName:
+                                        "rayTracingTrajectoryPathMaterial"
+                                    trajectoryColor: modelData.color
+                                    trajectoryOpacity: modelData.opacity
                                 }
                             }
                         }
@@ -4487,7 +4489,7 @@ ApplicationWindow {
                         Layout.rightMargin: 20
                         title: qsTr("Graphics")
                         description: qsTr(
-                            "Authored mode shows the map's baked texture lighting without dynamic lights. Qt 6.8 maps Highest filtering to trilinear.")
+                            "Native mode combines the map textures with a static sun and ambient fill while keeping dynamic shadows off. Qt 6.8 maps Highest filtering to trilinear.")
 
                         SettingCombo {
                             label: qsTr("Lighting")
@@ -4496,7 +4498,7 @@ ApplicationWindow {
                                    ? window.graphicsSettings.lightingMode
                                    : "authored"
                             options: [
-                                { "label": qsTr("Authored / baked"),
+                                { "label": qsTr("Native + static sun"),
                                   "value": "authored" },
                                 { "label": qsTr("Dynamic lit"),
                                   "value": "lit" }

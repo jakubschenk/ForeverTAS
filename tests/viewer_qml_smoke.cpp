@@ -66,6 +66,18 @@ bool ViewRotationAnimationIsSearchIndependent() {
             !binding.contains("controller.running");
 }
 
+QByteArray RuntimeEnumPropertyKey(const QObject *object,
+                                  const char *propertyName) {
+    if (object == nullptr) return {};
+    const QMetaObject *metaObject = object->metaObject();
+    const int propertyIndex = metaObject->indexOfProperty(propertyName);
+    if (propertyIndex < 0) return {};
+    const QMetaProperty property = metaObject->property(propertyIndex);
+    const char *const key = property.enumerator().valueToKey(
+            object->property(propertyName).toInt());
+    return key != nullptr ? QByteArray(key) : QByteArray{};
+}
+
 template <typename Predicate>
 bool WaitUntil(Predicate predicate, int timeoutMs = 60000) {
     QElapsedTimer timer;
@@ -275,8 +287,7 @@ bool VisualNativeMapsMatchLighting(
                 lightingProperty.enumerator().valueToKey(
                         material->property("lighting").toInt());
         const QByteArray expectedLighting =
-                authoredLighting ||
-                        definition.value(QStringLiteral("unlit")).toBool()
+                definition.value(QStringLiteral("unlit")).toBool()
                 ? QByteArrayLiteral("NoLighting")
                 : QByteArrayLiteral("FragmentLighting");
         if (lightingName == nullptr ||
@@ -5517,6 +5528,57 @@ int main(int argc, char **argv) {
                                         root->findChildren<QObject *>(
                                                 QStringLiteral(
                                                         "trackVisualBaseTexture"));
+                                const auto allMipFiltersEqual = [](
+                                        const QList<QObject *> &textures,
+                                        const QByteArray &expected) {
+                                    return !textures.isEmpty() &&
+                                            std::all_of(
+                                                    textures.cbegin(),
+                                                    textures.cend(),
+                                                    [&expected](
+                                                            const QObject *texture) {
+                                                        return RuntimeEnumPropertyKey(
+                                                                       texture,
+                                                                       "mipFilter") ==
+                                                                expected;
+                                                    });
+                                };
+                                bool textureFilteringValid =
+                                        allMipFiltersEqual(
+                                                visualBaseTextures,
+                                                QByteArrayLiteral("Linear"));
+                                const QByteArray initialMipFilter =
+                                        visualBaseTextures.isEmpty()
+                                        ? QByteArrayLiteral("missing")
+                                        : RuntimeEnumPropertyKey(
+                                                  visualBaseTextures.front(),
+                                                  "mipFilter");
+                                graphicsSettings.setTextureFiltering(
+                                        QStringLiteral("bilinear"));
+                                QCoreApplication::processEvents();
+                                textureFilteringValid &=
+                                        allMipFiltersEqual(
+                                                visualBaseTextures,
+                                                QByteArrayLiteral("Nearest"));
+                                const QByteArray bilinearMipFilter =
+                                        visualBaseTextures.isEmpty()
+                                        ? QByteArrayLiteral("missing")
+                                        : RuntimeEnumPropertyKey(
+                                                  visualBaseTextures.front(),
+                                                  "mipFilter");
+                                graphicsSettings.setTextureFiltering(
+                                        QStringLiteral("trilinear"));
+                                QCoreApplication::processEvents();
+                                textureFilteringValid &=
+                                        allMipFiltersEqual(
+                                                visualBaseTextures,
+                                                QByteArrayLiteral("Linear"));
+                                const QByteArray restoredMipFilter =
+                                        visualBaseTextures.isEmpty()
+                                        ? QByteArrayLiteral("missing")
+                                        : RuntimeEnumPropertyKey(
+                                                  visualBaseTextures.front(),
+                                                  "mipFilter");
                                 const auto materialState =
                                         [](const QObject *material) {
                                             return QVariantList{
@@ -5621,6 +5683,8 @@ int main(int argc, char **argv) {
                                         static_cast<int>(
                                                 viewer.ellipsoidCount() *
                                                 viewer.runCount());
+                                const bool proxyCarsVisibleInTexturedMode =
+                                        !viewer.vehicleVisualAvailable();
                                 bool rootsVisible =
                                         carRoots.size() ==
                                                 viewer.runCount() &&
@@ -5693,38 +5757,31 @@ int main(int argc, char **argv) {
                                     renderModeSelector->setProperty(
                                             "currentIndex", 0);
                                 }
-                                const bool initialModelState =
-                                        !filled->property("visible").toBool() &&
-                                        !wire->property("visible").toBool() &&
-                                        renderModeOptionsValid &&
-                                        renderModeSelector
-                                                        ->property("currentValue")
-                                                        .toString() ==
-                                                QStringLiteral("textured") &&
+                                const bool visualCountsValid =
                                         visualModels.size() ==
                                                 viewer.visualInstances().size() &&
                                         viewer.visualTriangleCount() > 0 &&
                                         viewer.visualMeshCount() > 0 &&
                                         viewer.materialCount() > 0 &&
-                                        initialVisibleVisualModels > 0 &&
+                                        initialVisibleVisualModels > 0;
+                                const bool visualGeometryValid =
                                         ModelsHaveGeometry(
                                                 visualModels,
-                                                visualModels.size()) &&
+                                                visualModels.size());
+                                const bool visualBindingsValid =
                                         VisualMaterialsAreBoundAndShared(
                                                 visualModels,
                                                 visualMaterials,
                                                 visualBaseTextures,
-                                                viewer) &&
+                                                viewer);
+                                const bool visualLightingValid =
                                         VisualNativeMapsMatchLighting(
                                                 visualMaterials, viewer,
-                                                true) &&
-                                        root->findChildren<QObject *>(
-                                                    QStringLiteral(
-                                                            "trackVisualNormalTexture"))
-                                                .isEmpty() &&
+                                                true);
+                                const bool carModelsValid =
                                         ModelsHaveState(carFilledModels,
                                                         expectedCarModels,
-                                                        true) &&
+                                                        proxyCarsVisibleInTexturedMode) &&
                                         FilledModelsHaveBakedRunPalettes(
                                                 carFilledModels,
                                                 carFilledMaterials,
@@ -5736,12 +5793,30 @@ int main(int argc, char **argv) {
                                                 selectedCarFilledModels,
                                                 static_cast<int>(
                                                         viewer.ellipsoidCount()),
-                                                true) &&
+                                                proxyCarsVisibleInTexturedMode) &&
                                         ModelsHaveState(
                                                 selectedCarWireModels,
                                                 static_cast<int>(
                                                         viewer.ellipsoidCount()),
                                                 false);
+                                const bool initialModelState =
+                                        !filled->property("visible").toBool() &&
+                                        !wire->property("visible").toBool() &&
+                                        renderModeOptionsValid &&
+                                        textureFilteringValid &&
+                                        renderModeSelector
+                                                        ->property("currentValue")
+                                                        .toString() ==
+                                                QStringLiteral("textured") &&
+                                        visualCountsValid &&
+                                        visualGeometryValid &&
+                                        visualBindingsValid &&
+                                        visualLightingValid &&
+                                        root->findChildren<QObject *>(
+                                                    QStringLiteral(
+                                                            "trackVisualNormalTexture"))
+                                                .isEmpty() &&
+                                        carModelsValid;
                                 graphicsSettings.setLightingMode(
                                         QStringLiteral("lit"));
                                 QCoreApplication::processEvents();
@@ -5781,9 +5856,11 @@ int main(int argc, char **argv) {
                                         VisualNativeMapsMatchLighting(
                                                 visualMaterials, viewer,
                                                 true) &&
-                                        !mainMapLight->property("visible")
-                                                 .toBool() &&
-                                        !fillMapLight->property("visible")
+                                        mainMapLight->property("visible")
+                                                .toBool() &&
+                                        fillMapLight->property("visible")
+                                                .toBool() &&
+                                        !mainMapLight->property("castsShadow")
                                                  .toBool();
                                 const bool rasterOnlyModeValid =
                                         gpuRayTracingView == nullptr &&
@@ -5825,43 +5902,18 @@ int main(int argc, char **argv) {
                                                                          "ws")
                                                                     .toBool();
                                                 });
-                                const auto enumPropertyKey =
-                                        [](const QObject *object,
-                                           const char *propertyName) {
-                                            if (object == nullptr) {
-                                                return QByteArray{};
-                                            }
-                                            const QMetaObject *metaObject =
-                                                    object->metaObject();
-                                            const int propertyIndex =
-                                                    metaObject->indexOfProperty(
-                                                            propertyName);
-                                            if (propertyIndex < 0) {
-                                                return QByteArray{};
-                                            }
-                                            const QMetaProperty property =
-                                                    metaObject->property(
-                                                            propertyIndex);
-                                            const char *const key =
-                                                    property.enumerator()
-                                                            .valueToKey(
-                                                                    object->property(
-                                                                                  propertyName)
-                                                                            .toInt());
-                                            return key != nullptr
-                                                    ? QByteArray(key)
-                                                    : QByteArray{};
-                                        };
                                 const QUrl skySource = daySkyTexture != nullptr
                                         ? daySkyTexture->property("source")
                                                   .toUrl()
                                         : QUrl{};
                                 const QByteArray backgroundModeName =
-                                        enumPropertyKey(mapEnvironment,
-                                                        "backgroundMode");
+                                        RuntimeEnumPropertyKey(
+                                                mapEnvironment,
+                                                "backgroundMode");
                                 const QByteArray mappingModeName =
-                                        enumPropertyKey(daySkyTexture,
-                                                        "mappingMode");
+                                        RuntimeEnumPropertyKey(
+                                                daySkyTexture,
+                                                "mappingMode");
                                 const bool daylightEnvironment =
                                         mapEnvironment != nullptr &&
                                         daySkyTexture != nullptr &&
@@ -5874,7 +5926,7 @@ int main(int argc, char **argv) {
                                                 .toBool() &&
                                         mapEnvironment->property(
                                                               "probeExposure")
-                                                        .toDouble() >= 0.8 &&
+                                                        .toDouble() >= 0.5 &&
                                         mapEnvironment->property(
                                                               "skyboxBlurAmount")
                                                         .toDouble() == 0.0 &&
@@ -5888,10 +5940,10 @@ int main(int argc, char **argv) {
                                                         "/environment/day_sky.png") &&
                                         mainMapLight != nullptr &&
                                         fillMapLight != nullptr &&
-                                        !mainMapLight->property("visible")
-                                                 .toBool() &&
-                                        !fillMapLight->property("visible")
-                                                 .toBool() &&
+                                        mainMapLight->property("visible")
+                                                .toBool() &&
+                                        fillMapLight->property("visible")
+                                                .toBool() &&
                                         !mainMapLight
                                                  ->property("castsShadow")
                                                  .toBool() &&
@@ -5936,6 +5988,20 @@ int main(int argc, char **argv) {
                                                 << geometryAttached
                                                 << ", initial="
                                                 << initialModelState
+                                                << ", filtering="
+                                                << textureFilteringValid << "("
+                                                << initialMipFilter.constData()
+                                                << "/"
+                                                << bilinearMipFilter.constData()
+                                                << "/"
+                                                << restoredMipFilter.constData()
+                                                << ")"
+                                                << ", scene="
+                                                << visualCountsValid << "/"
+                                                << visualGeometryValid << "/"
+                                                << visualBindingsValid << "/"
+                                                << visualLightingValid << "/"
+                                                << carModelsValid
                                                 << ", graphics="
                                                 << graphicsSettingsModesValid
                                                 << ", raster="
@@ -6105,7 +6171,7 @@ int main(int argc, char **argv) {
                                                 initialVisibleVisualModels &&
                                         ModelsHaveState(carFilledModels,
                                                         expectedCarModels,
-                                                        true) &&
+                                                        proxyCarsVisibleInTexturedMode) &&
                                         ModelsHaveState(carWireModels,
                                                         expectedCarModels,
                                                         false) &&
@@ -6113,7 +6179,7 @@ int main(int argc, char **argv) {
                                                 selectedCarFilledModels,
                                                 static_cast<int>(
                                                         viewer.ellipsoidCount()),
-                                                true) &&
+                                                proxyCarsVisibleInTexturedMode) &&
                                         ModelsHaveState(
                                                 selectedCarWireModels,
                                                 static_cast<int>(
@@ -7254,7 +7320,7 @@ int main(int argc, char **argv) {
                                                     currentSelectedFilledModels,
                                                     static_cast<int>(
                                                             viewer.ellipsoidCount()),
-                                                    true);
+                                                    !viewer.vehicleVisualAvailable());
                                     if (driveFocusedRealCar &&
                                         currentViewport != nullptr &&
                                         currentManualInputFocus != nullptr) {
@@ -7518,6 +7584,20 @@ int main(int argc, char **argv) {
                                             << ", expectedModels="
                                             << expectedCarModels
                                             << ", initial=" << initialModelState
+                                            << ", filtering="
+                                            << textureFilteringValid << "("
+                                            << initialMipFilter.constData()
+                                            << "/"
+                                            << bilinearMipFilter.constData()
+                                            << "/"
+                                            << restoredMipFilter.constData()
+                                            << ")"
+                                            << ", scene="
+                                            << visualCountsValid << "/"
+                                            << visualGeometryValid << "/"
+                                            << visualBindingsValid << "/"
+                                            << visualLightingValid << "/"
+                                            << carModelsValid
                                             << ", bestInitial="
                                             << bestSelectedInitially
                                             << ", onlyBestSelected="

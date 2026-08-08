@@ -14,6 +14,11 @@ enum class NativeTextureSemantic {
     AlbedoSrgb,
     LinearData,
     NormalMap,
+    // Some TM shaders use BC1's fourth palette entry as ordinary color data
+    // even though the DDS block is encoded in its three-color/alpha form.
+    // Decode those materials as opaque four-color BC1 and discard storage
+    // alpha after decoding.
+    OpaqueAlbedoSrgb,
 };
 
 struct DecodedNativeTexture {

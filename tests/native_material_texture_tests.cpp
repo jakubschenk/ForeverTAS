@@ -290,7 +290,80 @@ bool TestResolveNativeMaterialProfile() {
                       "albedo sampler selection did not honor diffuse-first "
                       "priority");
     okay &= Check(selected.renderState.worldXz,
-                  "world-XZ rule was not applied for exact matching");
+                   "world-XZ rule was not applied for exact matching");
+    okay &= Check(selected.albedoAlphaUsage ==
+                          NativeAlbedoAlphaUsage::Ignore,
+                  "opaque world-XZ material retained storage alpha as opacity");
+    NativeMaterialProfile worldXzAlpha = selected;
+    ApplyNativeAlbedoTransparency(true, true, &worldXzAlpha);
+    okay &= Check(worldXzAlpha.renderState.alphaMode ==
+                          StaticVisualAlphaMode::Opaque,
+                  "opaque world-XZ material was promoted to transparency");
+
+    PhysicsSandboxRenderMaterial archivedGrass = material;
+    archivedGrass.modelPlainPath =
+            "Techno2\\Media\\Material\\PDiff PDiff PA TOcc PX2 "
+            "Grass.Material.Gbx";
+    archivedGrass.modelSelectedPath =
+            "Techno2\\Media\\Material\\A2A953B0330AA8444517528D3B749082FB";
+    archivedGrass.modelPath = archivedGrass.modelSelectedPath;
+    archivedGrass.shaderPlainPath =
+            "Techno2\\Media\\Shader\\Grass TOcc PC3.Shader.Gbx";
+    archivedGrass.shaderSelectedPath =
+            "Techno2\\Media\\Shader\\9155F0DF77F757DE83272751ABBBB11812";
+    archivedGrass.shaderPath = archivedGrass.shaderSelectedPath;
+    const NativeMaterialProfile realGrass =
+            ResolveNativeMaterialProfile(archivedGrass);
+    okay &= Check(realGrass.renderState.worldXz,
+                  "plain archived grass model identity did not enable "
+                  "world-XZ mapping");
+
+    PhysicsSandboxRenderMaterial grassFadeHelper;
+    grassFadeHelper.materialPlainPath =
+            "Stadium\\Media\\Material\\StadiumGrassFence.Material.Gbx";
+    grassFadeHelper.modelPlainPath =
+            "Techno2\\Media\\Material\\VDep Fence.Material.Gbx";
+    grassFadeHelper.shaderPlainPath =
+            "Techno2\\Media\\Shader\\VDep Fence PC3.Shader.Gbx";
+    grassFadeHelper.shaderSelectedPath =
+            "Techno2\\Media\\Shader\\BDF6CF0A30FB109B132F014C979D1BE0";
+    grassFadeHelper.shaderPath = grassFadeHelper.shaderSelectedPath;
+    PhysicsSandboxMaterialBitmap fence;
+    fence.samplerName = "FenceA";
+    fence.textureSourcePath =
+            "Stadium\\Media\\Texture\\Image\\StadiumGrassFenceD.dds";
+    PhysicsSandboxMaterialBitmap fade;
+    fade.samplerName = "FadeXZ";
+    grassFadeHelper.bitmaps = {fence, fade};
+    const NativeMaterialProfile grassFadeProfile =
+            ResolveNativeMaterialProfile(grassFadeHelper);
+    okay &= Check(!grassFadeProfile.visible,
+                  "plain VDep Fence helper shader was rendered as opaque "
+                  "grass geometry");
+    okay &= Check(grassFadeProfile.renderState.alphaMode ==
+                          StaticVisualAlphaMode::Opaque &&
+                          !grassFadeProfile.renderState.worldXz,
+                  "VDep Fence visibility bridge unexpectedly changed other "
+                  "material semantics");
+    grassFadeHelper.bitmaps.pop_back();
+    okay &= Check(ResolveNativeMaterialProfile(grassFadeHelper).visible,
+                  "incomplete grass-fence identity was hidden by the exact "
+                  "helper rule");
+
+    PhysicsSandboxRenderMaterial opaqueRoad = material;
+    opaqueRoad.modelPlainPath =
+            "Techno2\\Media\\Material\\TDiff_Spec_Nrm TOcc "
+            "CSpecSoft.Material.Gbx";
+    opaqueRoad.modelPath =
+            "Techno2\\Media\\Material\\337419240E374ECD7069E5ED7C7F028E12";
+    opaqueRoad.shaderPath =
+            "Techno2\\Media\\Shader\\C293327207F73142F711AB47E911684D30";
+    const NativeMaterialProfile nativeRoad =
+            ResolveNativeMaterialProfile(opaqueRoad);
+    okay &= Check(nativeRoad.renderState.alphaMode ==
+                          StaticVisualAlphaMode::Opaque,
+                  "plain native road model incorrectly enabled broad "
+                  "transparency heuristics");
 
     PhysicsSandboxRenderMaterial vehicleMaterial;
     PhysicsSandboxMaterialBitmap diffuseGloss;
@@ -355,12 +428,14 @@ bool TestResolveNativeMaterialProfile() {
     okay &= Check(water.renderState.doubleSided,
                   "water should force double-sided rendering");
 
-    NativeMaterialProfile binaryAlpha = selected;
+    NativeMaterialProfile binaryAlpha;
+    binaryAlpha.renderState.alphaMode = StaticVisualAlphaMode::Opaque;
     ApplyNativeAlbedoTransparency(true, false, &binaryAlpha);
     okay &= Check(binaryAlpha.renderState.alphaMode ==
                           StaticVisualAlphaMode::Masked,
                   "binary albedo alpha should select masked rendering");
-    NativeMaterialProfile partialAlpha = selected;
+    NativeMaterialProfile partialAlpha;
+    partialAlpha.renderState.alphaMode = StaticVisualAlphaMode::Opaque;
     ApplyNativeAlbedoTransparency(true, true, &partialAlpha);
     okay &= Check(partialAlpha.renderState.alphaMode ==
                           StaticVisualAlphaMode::Blended,
@@ -532,6 +607,31 @@ bool TestDxtAlphaDecoding() {
                   "DXT1 binary alpha should set transparency metadata");
     okay &= Check(!decodedDxt1Binary.hasPartialTransparency,
                   "DXT1 binary alpha must not be classified as partial");
+
+    const DecodedNativeTexture decodedDxt1Opaque = DecodeNativeTexture(
+            dxt1Binary, QStringLiteral("opaque-color.dds"),
+            NativeTextureSemantic::OpaqueAlbedoSrgb, &error);
+    okay &= Check(error.isEmpty(), "opaque DXT1 decode returned an error");
+    if (!Check(decodedDxt1Opaque.mipmaps.size() == 1u,
+               "opaque DXT1 should decode one mip level")) {
+        return false;
+    }
+    okay &= Check(PixelRgba(decodedDxt1Opaque.mipmaps.front(), 0, 0) ==
+                          std::array<unsigned char, 4>{170u, 170u, 170u,
+                                                       255u},
+                  "opaque DXT1 did not reinterpret palette entry 3 as color");
+    okay &= Check(!decodedDxt1Opaque.hasTransparency &&
+                          !decodedDxt1Opaque.hasPartialTransparency,
+                  "opaque DXT1 retained storage alpha metadata");
+    const PreparedNativeTexture preparedDxt1Opaque = PrepareNativeTexture(
+            dxt1Binary, QStringLiteral("opaque-color.dds"),
+            NativeTextureSemantic::OpaqueAlbedoSrgb, &error);
+    okay &= Check(error.isEmpty(), "opaque DXT1 prepare returned an error");
+    okay &= Check(preparedDxt1Opaque.fileSuffix == QStringLiteral("png"),
+                  "opaque DXT1 should preserve the remapped palette in PNG");
+    okay &= Check(!preparedDxt1Opaque.hasTransparency &&
+                          !preparedDxt1Opaque.hasPartialTransparency,
+                  "prepared opaque DXT1 retained storage alpha metadata");
     return okay;
 }
 

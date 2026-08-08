@@ -108,6 +108,29 @@ constexpr std::array<ShaderRule, 4> AdditionalShaderRules{{
          false, false, true},
 }};
 
+// These readable model identities are required to recover TM's world-space
+// grass mapping when the selected installed model path is an opaque hash. Do
+// not feed every plain model through ShaderRules: several legacy rules encode
+// gbx3d rendering heuristics (for example broad transparency) that are not
+// valid for all native Stadium materials.
+constexpr std::array<std::string_view, 3> PlainWorldXzModelRules{{
+        "techno2/media/material/pdiff pdiff pa px2 grass2",
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass",
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv",
+}};
+
+// StadiumGrassFence is helper geometry whose FenceA/FadeXZ shader fades
+// crossed planes around the camera. Rendering it through the generic opaque
+// albedo path instead produces dense bright stripes. Require the complete
+// authored identity and both shader-specific samplers so an unrelated use of
+// one readable path cannot be hidden accidentally.
+constexpr std::string_view PlainGrassFenceMaterial =
+        "stadium/media/material/stadiumgrassfence";
+constexpr std::string_view PlainGrassFenceModel =
+        "techno2/media/material/vdep fence";
+constexpr std::string_view PlainGrassFenceShader =
+        "techno2/media/shader/vdep fence pc3";
+
 std::string Normalize(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char character) {
@@ -118,6 +141,20 @@ std::string Normalize(std::string value) {
         value.erase(value.find("//"), 1u);
     }
     while (!value.empty() && value.back() == '/') value.pop_back();
+    return value;
+}
+
+std::string CanonicalRulePath(std::string value) {
+    value = Normalize(std::move(value));
+    for (const std::string_view extension : {std::string_view{".material.gbx"},
+                                             std::string_view{".shader.gbx"}}) {
+        if (value.size() >= extension.size() &&
+            value.compare(value.size() - extension.size(), extension.size(),
+                          extension) == 0) {
+            value.erase(value.size() - extension.size());
+            break;
+        }
+    }
     return value;
 }
 
@@ -228,6 +265,43 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     const std::string shader = Normalize(material.shaderPath);
     ApplyRules(ShaderRules, shader, &profile);
     ApplyRules(AdditionalShaderRules, shader, &profile);
+
+    const std::string plainModel = CanonicalRulePath(
+            material.modelPlainPath.empty() ? material.modelPath
+                                            : material.modelPlainPath);
+    for (std::string_view grassModel : PlainWorldXzModelRules) {
+        if (EndsWithPath(plainModel, grassModel)) {
+            profile.worldXz = true;
+            profile.renderState.worldXz = true;
+            break;
+        }
+    }
+
+    const std::string plainMaterial = CanonicalRulePath(
+            material.materialPlainPath.empty() ? material.sourcePath
+                                               : material.materialPlainPath);
+    const std::string plainShader = CanonicalRulePath(
+            material.shaderPlainPath.empty() ? material.shaderPath
+                                             : material.shaderPlainPath);
+    if (EndsWithPath(plainMaterial, PlainGrassFenceMaterial) &&
+        EndsWithPath(plainModel, PlainGrassFenceModel) &&
+        EndsWithPath(plainShader, PlainGrassFenceShader) &&
+        FindSampler(material, "fencea") >= 0 &&
+        FindSampler(material, "fadexz") >= 0) {
+        profile.visible = false;
+    }
+
+    // Legacy world-projected PDiff/Grass textures can contain DXT1 transparent
+    // indices even though the shader treats the surface as fully opaque. Using
+    // those storage bits as opacity exposes the sky or a coplanar under-layer,
+    // which turns distant grass into a bright checker pattern. Keep automatic
+    // alpha discovery for unknown materials, but follow the explicit PDiff
+    // shader semantics for known world-XZ surfaces.
+    if (profile.renderState.worldXz &&
+        profile.renderState.alphaMode == StaticVisualAlphaMode::Opaque &&
+        profile.albedoAlphaUsage == NativeAlbedoAlphaUsage::Opacity) {
+        profile.albedoAlphaUsage = NativeAlbedoAlphaUsage::Ignore;
+    }
     return profile;
 }
 

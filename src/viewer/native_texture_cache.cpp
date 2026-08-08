@@ -36,7 +36,7 @@ constexpr std::uint32_t GlCompressedRgbaDxt3 = 0x83f2u;
 constexpr std::uint32_t GlCompressedRgbaDxt5 = 0x83f3u;
 constexpr std::uint32_t GlCompressedRedRgtc1 = 0x8dbbu;
 constexpr std::uint32_t GlCompressedRgRgtc2 = 0x8dbdu;
-constexpr char CacheVersion[] = "forevertas-native-texture-v2";
+constexpr char CacheVersion[] = "forevertas-native-texture-v3";
 constexpr int MaxTextureDimension = 8192;
 constexpr qint64 MaxDecodedTexturePixels = 16ll * 1024ll * 1024ll;
 constexpr qsizetype MaxEncodedTextureBytes = 256ll * 1024ll * 1024ll;
@@ -373,7 +373,9 @@ QImage DecodeBlockCompressed(const QByteArray &encoded,
             alpha.fill(255u);
             std::array<unsigned char, 16> secondChannel{};
             const unsigned char *colorBlock = block;
-            bool forceFourColors = false;
+            bool forceFourColors =
+                    semantic == NativeTextureSemantic::OpaqueAlbedoSrgb &&
+                    format == DdsFormat::Dxt1;
             if (format == DdsFormat::Dxt3) {
                 for (int pixel = 0; pixel < 16; ++pixel) {
                     const unsigned char nibble = static_cast<unsigned char>(
@@ -440,6 +442,9 @@ QImage DecodeBlockCompressed(const QByteArray &encoded,
                         }
                     }
                 }
+                if (semantic == NativeTextureSemantic::OpaqueAlbedoSrgb) {
+                    pixel[3] = 255u;
+                }
                 StorePixel(image, blockX * 4 + local % 4,
                            blockY * 4 + local / 4, pixel,
                            hasTransparency);
@@ -463,6 +468,7 @@ unsigned char ExtractMasked(std::uint32_t value, std::uint32_t mask,
 QImage DecodeUncompressed(const QByteArray &encoded,
                           const DdsDescription &description,
                           const DdsMipSlice &slice,
+                          NativeTextureSemantic semantic,
                           bool *hasTransparency) {
     QImage image(slice.width, slice.height, QImage::Format_RGBA8888);
     image.fill(Qt::transparent);
@@ -494,6 +500,9 @@ QImage DecodeUncompressed(const QByteArray &encoded,
                          ExtractMasked(value, description.blueMask, 0u),
                          ExtractMasked(value, description.alphaMask, 255u)};
             }
+            if (semantic == NativeTextureSemantic::OpaqueAlbedoSrgb) {
+                pixel[3] = 255u;
+            }
             StorePixel(image, x, y, pixel, hasTransparency);
         }
     }
@@ -519,7 +528,7 @@ DecodedNativeTexture DecodeDds(const QByteArray &encoded,
                                            semantic,
                                            &result.hasTransparency);
         } else {
-            image = DecodeUncompressed(encoded, description, slice,
+            image = DecodeUncompressed(encoded, description, slice, semantic,
                                        &result.hasTransparency);
         }
         if (image.isNull()) {
@@ -624,7 +633,16 @@ PreparedNativeTexture WrapCompressedDds(
 
 QByteArray EncodePng(const QImage &source, NativeTextureSemantic semantic) {
     QImage image = source.convertToFormat(QImage::Format_RGBA8888);
-    image.setColorSpace(semantic == NativeTextureSemantic::AlbedoSrgb
+    if (semantic == NativeTextureSemantic::OpaqueAlbedoSrgb) {
+        for (int y = 0; y < image.height(); ++y) {
+            unsigned char *row = image.scanLine(y);
+            for (int x = 0; x < image.width(); ++x) {
+                row[x * 4 + 3] = 255u;
+            }
+        }
+    }
+    image.setColorSpace((semantic == NativeTextureSemantic::AlbedoSrgb ||
+                         semantic == NativeTextureSemantic::OpaqueAlbedoSrgb)
                                 ? QColorSpace(QColorSpace::SRgb)
                                 : QColorSpace(QColorSpace::SRgbLinear));
     QByteArray result;
@@ -765,6 +783,14 @@ DecodedNativeTexture DecodeNativeTexture(
     result.sourceFormat = suffix.isEmpty() ? QStringLiteral("image")
                                             : suffix.toUpper();
     image = image.convertToFormat(QImage::Format_RGBA8888);
+    if (semantic == NativeTextureSemantic::OpaqueAlbedoSrgb) {
+        for (int y = 0; y < image.height(); ++y) {
+            unsigned char *row = image.scanLine(y);
+            for (int x = 0; x < image.width(); ++x) {
+                row[x * 4 + 3] = 255u;
+            }
+        }
+    }
     AccumulateAlphaCoverage(image, &result.hasTransparency,
                             &result.hasPartialTransparency);
     result.mipmaps.push_back(std::move(image));
@@ -858,8 +884,14 @@ PreparedNativeTexture PrepareNativeTexture(
     result.estimatedGpuBytes =
             static_cast<qint64>(size.width()) * size.height() * 4 * 4 / 3;
     result.generateMipmaps = true;
-    result.hasTransparency = decoded.hasTransparency;
-    result.hasPartialTransparency = decoded.hasPartialTransparency;
+    result.hasTransparency =
+            semantic == NativeTextureSemantic::OpaqueAlbedoSrgb
+                    ? false
+                    : decoded.hasTransparency;
+    result.hasPartialTransparency =
+            semantic == NativeTextureSemantic::OpaqueAlbedoSrgb
+                    ? false
+                    : decoded.hasPartialTransparency;
     return result;
 }
 

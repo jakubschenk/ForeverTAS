@@ -38,8 +38,10 @@ slots by the legacy sampler names. Multi-layer albedo follows the original
 blend equation, and a small explicit shader table supplies transparency,
 two-sided, unlit, clamp/flip, water, and projection behavior. The eleven known
 PDiff-family shaders sample exact world X/Z coordinates at one repeat per 16
-metres. Other meshes retain authored UV0; the old randomized terrain remeshing
-is not used.
+metres. ForeverValidator preserves both readable plain material/model/shader
+paths and selected archive identities so a hashed installed path cannot erase
+those semantics. Other meshes retain authored UV0; the old randomized terrain
+remeshing is not used.
 
 If an asset is absent, inline/generated, unsupported, or fails validation, the
 existing semantic replacement material remains available and the failure is
@@ -65,11 +67,16 @@ and specular maps use explicit sampler orientation, wrapping, filtering, mip,
 alpha, and culling state. Static geometry is rebuilt only after a successful
 replay reload; playback updates car transforms without touching map resources.
 
-Authored/baked lighting is the default: materials use unlit texture color, no
-light probe, no synthetic sun, and no tone mapping that would relight or wash
-out the map. A compatibility setting enables dynamic fragment lighting,
-normal/specular maps, ACES tone mapping, and optional world shadows. MSAA and
-texture filtering are persistent graphics settings.
+Native + static sun is the default. It keeps the authored diffuse composition,
+disables dynamic world shadows and normal/specular relighting, but uses low
+energy sky, sun, and fill contributions with linear-to-sRGB tonemapping. This
+avoids the near-black result caused by sending linear material output directly
+to the display. The shared `DefaultPreLightGen.Texture.Gbx` input is a runtime
+shader resource, not a per-material image that can be extracted as a baked
+lightmap. A compatibility setting enables stronger dynamic fragment lighting,
+normal/specular maps, ACES tonemapping, and optional world shadows. MSAA and
+texture filtering are persistent graphics settings; bilinear mode still uses
+the authored/generated mip chain and trilinear mode blends between mip levels.
 The replay-car proxy uses a clear-coated car treatment that remains compatible
 with the terrain material contract.
 

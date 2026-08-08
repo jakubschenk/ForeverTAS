@@ -33,9 +33,10 @@ struct TextureKey {
 
 struct CompositeKey {
     std::array<PhysicsSandboxTextureAssetId, 4> ids{};
+    NativeTextureSemantic semantic = NativeTextureSemantic::AlbedoSrgb;
 
     bool operator<(const CompositeKey &other) const {
-        return ids < other.ids;
+        return std::tie(ids, semantic) < std::tie(other.ids, other.semantic);
     }
 };
 
@@ -173,9 +174,11 @@ public:
             const PhysicsSandboxTextureAssetHandle &blend2,
             const PhysicsSandboxTextureAssetHandle &blendMask,
             const PhysicsSandboxTextureAssetHandle &blend3,
+            NativeTextureSemantic albedoSemantic,
             QString *diagnostic) {
         const CompositeKey key{{AssetId(diffuse), AssetId(blend2),
-                                AssetId(blendMask), AssetId(blend3)}};
+                                AssetId(blendMask), AssetId(blend3)},
+                               albedoSemantic};
         const auto existing = cachedComposites_.find(key);
         if (existing != cachedComposites_.end()) {
             ++telemetry_->cacheHitCount;
@@ -187,7 +190,7 @@ public:
         const QByteArray diffuseBytes = AssetBytes(diffuse);
         DecodedNativeTexture diffuseImage = DecodeNativeTexture(
                 diffuseBytes, QString::fromUtf8(diffuse->metadata.sourcePath),
-                NativeTextureSemantic::AlbedoSrgb, &error);
+                albedoSemantic, &error);
         if (!error.isEmpty()) {
             AppendDiagnostic(diagnostic, error);
             ++telemetry_->failedTextureCount;
@@ -214,7 +217,7 @@ public:
         DecodedNativeTexture blend2Image;
         DecodedNativeTexture maskImage;
         DecodedNativeTexture blend3Image;
-        if (!decodeOptional(blend2, NativeTextureSemantic::AlbedoSrgb,
+        if (!decodeOptional(blend2, albedoSemantic,
                             &blend2Image) ||
             !decodeOptional(blendMask, NativeTextureSemantic::LinearData,
                             &maskImage) ||
@@ -227,7 +230,7 @@ public:
                 blendMask ? &maskImage : nullptr,
                 blend3 ? &blend3Image : nullptr);
         const PreparedNativeTexture prepared = PrepareNativeTexture(
-                composited, NativeTextureSemantic::AlbedoSrgb, &error);
+                composited, albedoSemantic, &error);
         if (error.isEmpty() && prepared.estimatedGpuBytes > 0 &&
             static_cast<std::uint64_t>(prepared.estimatedGpuBytes) >
                     MaxTextureGpuBytesPerScene -
@@ -259,7 +262,7 @@ public:
                 prepared, identity, packIdentity_,
                 QStringLiteral("composited material %1")
                         .arg(diffuse->metadata.id),
-                NativeTextureSemantic::AlbedoSrgb, cacheRoot_);
+                albedoSemantic, cacheRoot_);
         if (!cached) {
             ++telemetry_->failedTextureCount;
             AppendDiagnostic(diagnostic, cached.error);
@@ -367,16 +370,22 @@ NativeMaterialLoadResult LoadNativeMaterials(
                                   &runtime.diagnostic);
         CachedNativeTexture cachedAlbedo;
         if (albedo) {
+            const NativeTextureSemantic albedoSemantic =
+                    runtime.profile.albedoAlphaUsage ==
+                                    NativeAlbedoAlphaUsage::Ignore
+                            ? NativeTextureSemantic::OpaqueAlbedoSrgb
+                            : NativeTextureSemantic::AlbedoSrgb;
             runtime.albedoSourcePath =
                     QString::fromUtf8((*albedo)->metadata.sourcePath);
             if ((blend2 && blendMask) || blend3) {
                 cachedAlbedo = loader.Composite(
                         *albedo, blend2.value_or(nullptr),
                         blendMask.value_or(nullptr), blend3.value_or(nullptr),
+                        albedoSemantic,
                         &runtime.diagnostic);
             } else {
                 cachedAlbedo = loader.Cache(
-                        *albedo, NativeTextureSemantic::AlbedoSrgb,
+                        *albedo, albedoSemantic,
                         &runtime.diagnostic);
             }
         }

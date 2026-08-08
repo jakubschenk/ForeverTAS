@@ -1,6 +1,7 @@
 #include "viewer/skidmark_geometry.h"
 
 #include <QCoreApplication>
+#include <QColor>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -16,6 +17,7 @@
 #include <QThread>
 #include <QUrl>
 
+#include <cmath>
 #include <iostream>
 #include <vector>
 
@@ -106,25 +108,95 @@ int main(int argc, char **argv) {
     qputenv("QSG_RENDER_LOOP", "basic");
 #endif
     QGuiApplication application(argc, argv);
+    const bool trajectoryMode =
+            application.arguments().contains(QStringLiteral("--trajectory"));
 #ifdef Q_OS_WIN
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
 #endif
 
     previousMessageHandler = qInstallMessageHandler(CaptureMessage);
 
-    const auto resourceHasContent = [](const QString &path) {
+    const auto readContent = [](const QString &path) {
         QFile file(path);
-        return file.open(QIODevice::ReadOnly) && !file.readAll().isEmpty();
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
     };
-    const bool packagedShaders = resourceHasContent(QStringLiteral(
-                                             ":/qt/qml/ForeverTAS/qml/"
-                                             "shaders/skidmark.vert")) &&
-            resourceHasContent(QStringLiteral(
-                    ":/qt/qml/ForeverTAS/qml/shaders/skidmark.frag"));
+    const QString shaderName = trajectoryMode
+            ? QStringLiteral("trajectory")
+            : QStringLiteral("skidmark");
+    const QString resourceBase =
+            QStringLiteral(":/qt/qml/ForeverTAS/qml/shaders/") + shaderName;
+    const QByteArray vertexSource =
+            readContent(resourceBase + QStringLiteral(".vert"));
+    const QByteArray fragmentSource =
+            readContent(resourceBase + QStringLiteral(".frag"));
+    const bool packagedShaders =
+            !vertexSource.isEmpty() && !fragmentSource.isEmpty();
     if (!packagedShaders) {
         qInstallMessageHandler(previousMessageHandler);
-        std::cerr << "packaged skidmark shader resources are missing\n";
+        std::cerr << "packaged " << shaderName.toStdString()
+                  << " shader resources are missing\n";
         return 1;
+    }
+    if (trajectoryMode) {
+        const QByteArray materialSource = readContent(QStringLiteral(
+                FOREVERTAS_SOURCE_DIR "/qml/TrajectoryMaterial.qml"));
+        const QByteArray mainSource = readContent(QStringLiteral(
+                FOREVERTAS_SOURCE_DIR "/qml/Main.qml"));
+        const qsizetype rasterModelStart =
+                mainSource.indexOf("objectName: \"trajectoryPathModel\"");
+        const qsizetype rasterModelEnd = mainSource.indexOf(
+                "model: window.viewer.skidmarkPaths", rasterModelStart);
+        const QByteArray rasterModelSource =
+                rasterModelStart >= 0 && rasterModelEnd > rasterModelStart
+                ? mainSource.mid(rasterModelStart,
+                                 rasterModelEnd - rasterModelStart)
+                : QByteArray{};
+        const qsizetype rayModelStart = mainSource.indexOf(
+                "\"rayTracingTrajectoryPathModel\"");
+        const qsizetype rayModelEnd =
+                mainSource.indexOf("CuboidEditorScene {", rayModelStart);
+        const QByteArray rayModelSource =
+                rayModelStart >= 0 && rayModelEnd > rayModelStart
+                ? mainSource.mid(rayModelStart,
+                                 rayModelEnd - rayModelStart)
+                : QByteArray{};
+        const bool sourceContract =
+                vertexSource.contains(
+                        "POSITION = MODELVIEWPROJECTION_MATRIX * "
+                        "vec4(VERTEX, 1.0);") &&
+                vertexSource.contains(
+                        "POSITION.z -= 0.000005 * POSITION.w;") &&
+                !vertexSource.contains("VERTEX.y") &&
+                !vertexSource.contains("MODEL_MATRIX") &&
+                fragmentSource.contains("trajectoryColor.rgb") &&
+                fragmentSource.contains(
+                        "trajectoryColor.a * trajectoryOpacity") &&
+                materialSource.contains(
+                        "shadingMode: CustomMaterial.Unshaded") &&
+                materialSource.contains(
+                        "sourceBlend: CustomMaterial.SrcAlpha") &&
+                materialSource.contains(
+                        "destinationBlend: "
+                        "CustomMaterial.OneMinusSrcAlpha") &&
+                materialSource.contains(
+                        "depthDrawMode: Material.NeverDepthDraw") &&
+                materialSource.contains("cullMode: Material.NoCulling") &&
+                mainSource.count("materials: TrajectoryMaterial") == 2 &&
+                rasterModelSource.contains(
+                        "trajectoryColor: modelData.color") &&
+                rasterModelSource.contains(
+                        "trajectoryOpacity: modelData.opacity") &&
+                !rasterModelSource.contains("depthBias") &&
+                rayModelSource.contains(
+                        "trajectoryColor: modelData.color") &&
+                rayModelSource.contains(
+                        "trajectoryOpacity: modelData.opacity") &&
+                !rayModelSource.contains("depthBias");
+        if (!sourceContract) {
+            qInstallMessageHandler(previousMessageHandler);
+            std::cerr << "trajectory shader/material source contract failed\n";
+            return 1;
+        }
     }
 
     forevertas::viewer::SkidmarkGeometry geometry;
@@ -142,13 +214,38 @@ int main(int argc, char **argv) {
                 }
             });
 
-    const QUrl fixture = QUrl::fromLocalFile(QStringLiteral(
-            FOREVERTAS_SOURCE_DIR "/tests/skidmark_shader_smoke.qml"));
+    const QUrl fixture = QUrl::fromLocalFile(
+            QStringLiteral(FOREVERTAS_SOURCE_DIR "/tests/") +
+            (trajectoryMode
+                     ? QStringLiteral("trajectory_shader_smoke.qml")
+                     : QStringLiteral("skidmark_shader_smoke.qml")));
     engine.load(fixture);
     if (engine.rootObjects().isEmpty()) {
         qInstallMessageHandler(previousMessageHandler);
-        std::cerr << "failed to load skidmark shader smoke scene\n";
+        std::cerr << "failed to load " << shaderName.toStdString()
+                  << " shader smoke scene\n";
         return 1;
+    }
+
+    if (trajectoryMode) {
+        QObject *const rootObject = engine.rootObjects().constFirst();
+        QObject *const model = rootObject->findChild<QObject *>(
+                QStringLiteral("trajectorySmokeModel"));
+        QObject *const material = rootObject->findChild<QObject *>(
+                QStringLiteral("trajectorySmokeMaterial"));
+        const bool runtimeContract =
+                model != nullptr && material != nullptr &&
+                !model->property("castsShadows").toBool() &&
+                !model->property("receivesShadows").toBool() &&
+                material->property("trajectoryColor").value<QColor>() ==
+                        QColor(QStringLiteral("#c02020")) &&
+                std::fabs(material->property("trajectoryOpacity").toDouble() -
+                          0.85) < 0.0001;
+        if (!runtimeContract) {
+            qInstallMessageHandler(previousMessageHandler);
+            std::cerr << "trajectory material runtime contract failed\n";
+            return 1;
+        }
     }
 
     auto *window =
@@ -171,7 +268,8 @@ int main(int argc, char **argv) {
     qInstallMessageHandler(previousMessageHandler);
 
     if (!exposed) {
-        std::cerr << "skidmark smoke scene was never exposed\n";
+        std::cerr << shaderName.toStdString()
+                  << " smoke scene was never exposed\n";
         return 1;
     }
     if (shaderFailed) {
@@ -183,12 +281,14 @@ int main(int argc, char **argv) {
     }
     const std::size_t darkPixels = DarkPixelCount(image);
     if (darkPixels < 100u) {
-        std::cerr << "skidmark shader produced only " << darkPixels
+        std::cerr << shaderName.toStdString() << " shader produced only "
+                  << darkPixels
                   << " non-background pixels\n";
         return 1;
     }
 
-    std::cout << "skidmark shader smoke passed (" << darkPixels
+    std::cout << shaderName.toStdString() << " shader smoke passed ("
+              << darkPixels
               << " non-background pixels)\n";
     return 0;
 }

@@ -12,7 +12,7 @@
     },
     "forevervalidator": {
       "repository": "https://github.com/jakubschenk/ForeverValidator.git",
-      "commit": "53ca9bc113f75d6764b5948baf53e8ac6d3519a7",
+      "commit": "3ae3b86b2fa86c5c76ebf0d036d9c4cf1527b55b",
       "version": "0.2.2"
     }
   },
@@ -27,7 +27,10 @@
     "search_object_output_neutral_paths": [
       "CMakeLists.txt",
       "README.md",
+      "docs/pr-experimental-renderer-visual-regressions.md",
       "docs/pr-material-texture-assets.md",
+      "docs/pr-renderer-material-semantic-paths.md",
+      "docs/pr-vehicle-material-relative-resolution.md",
       "docs/pr-vehicle-render-scene-wheel-state.md",
       "include/forevervalidator/experimental/physics_sandbox.h",
       "src/engine/game/material_render_definition.h",
@@ -45,6 +48,7 @@
       "src/format/static_solid/static_scene_archive_loader.h",
       "src/format/static_solid/static_solid_archive_graph_writer.cpp",
       "src/format/static_solid/static_solid_archive_graph_writer.h",
+      "src/format/static_solid/static_solid_archive_node_graph.cpp",
       "src/format/static_solid/static_solid_archive_tree_reader.cpp",
       "src/format/static_solid/static_solid_archive_tree_reader.h",
       "src/format/static_solid/static_solid_material_definition_resolver.cpp",
