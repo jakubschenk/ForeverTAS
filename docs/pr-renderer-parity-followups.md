@@ -16,6 +16,13 @@ authored raster materials:
 The static map remains authored/unlit. The moving vehicle may use the neutral
 sky probe, so this does not reintroduce runtime map relighting or ray tracing.
 
+## Companion dependency
+
+This branch pins the main-derived ForeverValidator renderer asset stack from
+`jakubschenk/ForeverValidator` PR #8 (`agent/renderer-parity-complete`). That
+branch supplies both lazy map texture assets and the installed vehicle render
+scene/wheel state used here.
+
 ## Vehicle path
 
 The companion ForeverValidator change exposes a cached, immutable vehicle
