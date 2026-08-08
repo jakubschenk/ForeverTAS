@@ -222,6 +222,15 @@ bool VisualMaterialsAreBoundAndShared(
                            : QByteArrayLiteral("SourceOver"));
         if (!baseTextureObjects.contains(baseMap) || normalMap != nullptr ||
             (emissive ? emissiveMap != baseMap : emissiveMap != nullptr) ||
+            !qFuzzyCompare(material->property("roughness").toFloat(),
+                           definition.value(QStringLiteral("roughness"))
+                                   .toFloat()) ||
+            !qFuzzyCompare(material->property("metalness").toFloat(),
+                           definition.value(QStringLiteral("metalness"))
+                                   .toFloat()) ||
+            !qFuzzyCompare(material->property("specularAmount").toFloat(),
+                           definition.value(QStringLiteral("specularAmount"))
+                                   .toFloat()) ||
             !qFuzzyCompare(material->property("opacity").toFloat(),
                            definition.value(QStringLiteral("opacity"))
                                    .toFloat()) ||

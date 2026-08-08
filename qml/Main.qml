@@ -2337,6 +2337,10 @@ ApplicationWindow {
                                            "neutral"
                                            ? 0
                                            : modelData.metalness
+                                specularAmount: window.renderMode ===
+                                                "neutral"
+                                                ? 1.0
+                                                : modelData.specularAmount
                                 normalMap: !window.authoredLighting
                                            && modelData.nativeNormal
                                            ? nativeNormalMap : null

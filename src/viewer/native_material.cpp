@@ -109,14 +109,15 @@ constexpr std::array<ShaderRule, 4> AdditionalShaderRules{{
 }};
 
 // These readable model identities are required to recover TM's world-space
-// grass mapping when the selected installed model path is an opaque hash. Do
-// not feed every plain model through ShaderRules: several legacy rules encode
-// gbx3d rendering heuristics (for example broad transparency) that are not
-// valid for all native Stadium materials.
-constexpr std::array<std::string_view, 3> PlainWorldXzModelRules{{
+// grass and dirt mapping when the selected installed model path is an opaque
+// hash. Do not feed every plain model through ShaderRules: several legacy rules
+// encode gbx3d rendering heuristics (for example broad transparency) that are
+// not valid for all native Stadium materials.
+constexpr std::array<std::string_view, 4> PlainWorldXzModelRules{{
         "techno2/media/material/pdiff pdiff pa px2 grass2",
         "techno2/media/material/pdiff pdiff pa tocc px2 grass",
         "techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv",
+        "techno2/media/material/soilgen21",
 }};
 
 // StadiumGrassFence is helper geometry whose FenceA/FadeXZ shader fades
@@ -269,8 +270,8 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     const std::string plainModel = CanonicalRulePath(
             material.modelPlainPath.empty() ? material.modelPath
                                             : material.modelPlainPath);
-    for (std::string_view grassModel : PlainWorldXzModelRules) {
-        if (EndsWithPath(plainModel, grassModel)) {
+    for (std::string_view worldXzModel : PlainWorldXzModelRules) {
+        if (EndsWithPath(plainModel, worldXzModel)) {
             profile.worldXz = true;
             profile.renderState.worldXz = true;
             break;

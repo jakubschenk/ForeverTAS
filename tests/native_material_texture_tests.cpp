@@ -318,6 +318,32 @@ bool TestResolveNativeMaterialProfile() {
                   "plain archived grass model identity did not enable "
                   "world-XZ mapping");
 
+    PhysicsSandboxRenderMaterial archivedDirt = material;
+    archivedDirt.materialPlainPath =
+            "Stadium\\Media\\Material\\StadiumDirt.Material.Gbx";
+    archivedDirt.modelPlainPath =
+            "Techno2\\Media\\Material\\SoilGen21.Material.Gbx";
+    archivedDirt.modelSelectedPath =
+            "Techno2\\Media\\Material\\0123456789ABCDEF0123456789ABCDEF";
+    archivedDirt.modelPath = archivedDirt.modelSelectedPath;
+    archivedDirt.shaderPlainPath =
+            "Techno2\\Media\\Shader\\SoilGen21 PC3.Shader.Gbx";
+    archivedDirt.shaderSelectedPath =
+            "Techno2\\Media\\Shader\\FEDCBA9876543210FEDCBA9876543210";
+    archivedDirt.shaderPath = archivedDirt.shaderSelectedPath;
+    const NativeMaterialProfile realDirt =
+            ResolveNativeMaterialProfile(archivedDirt);
+    okay &= Check(realDirt.renderState.worldXz,
+                  "plain archived SoilGen21 model identity did not enable "
+                  "world-XZ mapping");
+    PhysicsSandboxRenderMaterial dirtTransition = archivedDirt;
+    dirtTransition.modelPlainPath =
+            "Techno2\\Media\\Material\\SoilFixToGen21.Material.Gbx";
+    okay &= Check(!ResolveNativeMaterialProfile(dirtTransition)
+                           .renderState.worldXz,
+                  "SoilGen21 plain-path recovery matched a dirt transition "
+                  "material");
+
     PhysicsSandboxRenderMaterial grassFadeHelper;
     grassFadeHelper.materialPlainPath =
             "Stadium\\Media\\Material\\StadiumGrassFence.Material.Gbx";
