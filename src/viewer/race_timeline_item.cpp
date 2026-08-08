@@ -1,7 +1,9 @@
 #include "viewer/race_timeline_item.h"
 
 #include "app/panel_wheel_redirector.h"
+#if FOREVERTAS_GPU_RAY_TRACING
 #include "viewer/gpu_ray_tracing_view.h"
+#endif
 #include "viewer/whiteboard_canvas_item.h"
 
 #include "time_format.h"
@@ -524,15 +526,18 @@ void RegisterRaceViewerQmlTypes() {
     static const int wheelTypeId =
             qmlRegisterType<forevertas::app::PanelWheelRedirector>(
                     "ForeverTAS.Viewer", 1, 0, "PanelWheelRedirector");
-    static const int rayTracingTypeId =
-            qmlRegisterType<GpuRayTracingView>(
-                    "ForeverTAS.Viewer", 1, 0, "GpuRayTracingView");
+#if FOREVERTAS_GPU_RAY_TRACING
+    static const int rayTracingTypeId = qmlRegisterType<GpuRayTracingView>(
+            "ForeverTAS.Viewer", 1, 0, "GpuRayTracingView");
+#endif
     static const int whiteboardCanvasTypeId =
             qmlRegisterType<WhiteboardCanvasItem>(
                     "ForeverTAS.Viewer", 1, 0, "WhiteboardCanvasItem");
     Q_UNUSED(timelineTypeId);
     Q_UNUSED(wheelTypeId);
+#if FOREVERTAS_GPU_RAY_TRACING
     Q_UNUSED(rayTracingTypeId);
+#endif
     Q_UNUSED(whiteboardCanvasTypeId);
 }
 

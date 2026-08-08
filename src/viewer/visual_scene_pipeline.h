@@ -31,6 +31,9 @@ enum class StaticVisualAlphaMode : std::uint8_t {
 struct StaticVisualMaterialState {
     StaticVisualAlphaMode alphaMode = StaticVisualAlphaMode::Unknown;
     bool doubleSided = false;
+    // A small, explicit set of legacy shaders ignores authored UV0 and samples
+    // in world XZ at one repeat per 16 metres.
+    bool worldXz = false;
 };
 
 struct StaticVisualBatchOptions {
