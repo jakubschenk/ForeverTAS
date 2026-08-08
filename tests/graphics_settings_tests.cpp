@@ -61,7 +61,7 @@ bool TestPersistence() {
         settings.setRenderMode(QStringLiteral("wireframe"));
         settings.setLightingMode(QStringLiteral("lit"));
         settings.setMsaaSamples(4);
-        settings.setTextureFiltering(QStringLiteral("anisotropic"));
+        settings.setTextureFiltering(QStringLiteral("sharp"));
         settings.setWorldShadows(true);
         settings.setSkidmarksEnabled(false);
     }
@@ -77,7 +77,7 @@ bool TestPersistence() {
                           4,
                   "msaaSamples was not persisted");
     okay &= Check(restoredFile.value(QStringLiteral("graphics/textureFiltering"))
-                               .toString() == QStringLiteral("anisotropic"),
+                               .toString() == QStringLiteral("sharp"),
                    "textureFiltering was not persisted");
     okay &= Check(restoredFile.value(QStringLiteral("graphics/worldShadows"))
                                   .toBool() == true,
@@ -94,7 +94,7 @@ bool TestPersistence() {
                   "lightingMode was not restored");
     okay &= Check(restored.msaaSamples() == 4,
                   "msaaSamples was not restored");
-    okay &= Check(restored.textureFiltering() == QStringLiteral("anisotropic"),
+    okay &= Check(restored.textureFiltering() == QStringLiteral("sharp"),
                   "textureFiltering was not restored");
     okay &= Check(restored.worldShadows(),
                   "worldShadows was not restored");
@@ -174,7 +174,7 @@ bool TestMigration() {
                         QStringLiteral("authored"));
         legacy.setValue(QStringLiteral("graphics/msaaSamples"), 2);
         legacy.setValue(QStringLiteral("graphics/textureFiltering"),
-                        QStringLiteral("trilinear"));
+                        QStringLiteral("anisotropic"));
         legacy.setValue(QStringLiteral("graphics/worldShadows"), false);
         legacy.sync();
     }
@@ -182,7 +182,9 @@ bool TestMigration() {
     const GraphicsSettings settings(path);
     const bool okay =
             Check(settings.renderMode() == QStringLiteral("textured"),
-                  "legacy textured-rt was not migrated");
+                  "legacy textured-rt was not migrated") &&
+            Check(settings.textureFiltering() == QStringLiteral("trilinear"),
+                  "legacy anisotropic filtering was not migrated");
     if (!okay) {
         return false;
     }
@@ -190,7 +192,11 @@ bool TestMigration() {
     const QSettings migrated(path, QSettings::IniFormat);
     return Check(migrated.value(QStringLiteral("graphics/renderMode"))
                          .toString() == QStringLiteral("textured"),
-                 "migrated textured-rt was not persisted as textured");
+                 "migrated textured-rt was not persisted as textured") &&
+            Check(migrated.value(QStringLiteral("graphics/textureFiltering"))
+                          .toString() == QStringLiteral("trilinear"),
+                  "migrated anisotropic filtering was not persisted as "
+                  "trilinear");
 }
 
 bool TestSignals() {
@@ -233,8 +239,8 @@ bool TestSignals() {
     settings.setLightingMode(QStringLiteral("lit"));
     settings.setMsaaSamples(0);
     settings.setMsaaSamples(0);
-    settings.setTextureFiltering(QStringLiteral("anisotropic"));
-    settings.setTextureFiltering(QStringLiteral("anisotropic"));
+    settings.setTextureFiltering(QStringLiteral("sharp"));
+    settings.setTextureFiltering(QStringLiteral("sharp"));
     settings.setWorldShadows(true);
     settings.setWorldShadows(true);
     settings.setSkidmarksEnabled(false);

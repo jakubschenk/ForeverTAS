@@ -2265,6 +2265,13 @@ ApplicationWindow {
                                 Texture {
                                     id: replacementBaseMap
                                     objectName: "trackVisualBaseTexture"
+                                    readonly property bool sharpDetailFiltering:
+                                        window.textureFiltering ===
+                                        "sharp"
+                                        && modelData.alphaMode === "opaque"
+                                        && modelData.materialClass !== "Grass"
+                                        && modelData.materialClass !== "Dirt"
+                                        && modelData.materialClass !== "Asphalt"
                                     source: modelData.baseTexture
                                     tilingModeHorizontal: modelData.repeat
                                                           ? Texture.Repeat
@@ -2276,11 +2283,16 @@ ApplicationWindow {
                                     autoOrientation: false
                                     generateMipmaps:
                                         modelData.albedoGenerateMipmaps
-                                    minFilter: Texture.Linear
+                                    minFilter: sharpDetailFiltering
+                                               ? Texture.Nearest
+                                               : Texture.Linear
                                     magFilter: Texture.Linear
-                                    mipFilter: window.textureFiltering ===
-                                               "bilinear"
-                                               ? Texture.Nearest : Texture.Linear
+                                    mipFilter: sharpDetailFiltering
+                                               ? Texture.None
+                                               : (window.textureFiltering ===
+                                                  "bilinear"
+                                                  ? Texture.Nearest
+                                                  : Texture.Linear)
                                 }
 
                                 Texture {
@@ -2333,14 +2345,25 @@ ApplicationWindow {
                                            "neutral"
                                            ? 0.74
                                            : modelData.roughness
-                                metalness: window.renderMode ===
-                                           "neutral"
+                                // Authored track textures already contain the
+                                // game's baked lighting. Keep the low-energy
+                                // diffuse lights for readability, but do not
+                                // synthesize a second layer of PBR reflections
+                                // over grass, road paint, or stadium panels.
+                                metalness: window.authoredLighting
+                                           && window.renderMode === "textured"
                                            ? 0
-                                           : modelData.metalness
-                                specularAmount: window.renderMode ===
-                                                "neutral"
-                                                ? 1.0
-                                                : modelData.specularAmount
+                                           : (window.renderMode === "neutral"
+                                              ? 0
+                                              : modelData.metalness)
+                                specularAmount: window.authoredLighting
+                                                && window.renderMode ===
+                                                   "textured"
+                                                ? 0
+                                                : (window.renderMode ===
+                                                   "neutral"
+                                                   ? 1.0
+                                                   : modelData.specularAmount)
                                 normalMap: !window.authoredLighting
                                            && modelData.nativeNormal
                                            ? nativeNormalMap : null
@@ -2421,7 +2444,8 @@ ApplicationWindow {
                                     magFilter: Texture.Linear
                                     mipFilter: window.textureFiltering ===
                                                "bilinear"
-                                               ? Texture.Nearest : Texture.Linear
+                                               ? Texture.Nearest
+                                               : Texture.Linear
                                 }
 
                                 Texture {
@@ -4493,7 +4517,7 @@ ApplicationWindow {
                         Layout.rightMargin: 20
                         title: qsTr("Graphics")
                         description: qsTr(
-                            "Native mode combines the map textures with a static sun and ambient fill while keeping dynamic shadows off. Qt 6.8 maps Highest filtering to trilinear.")
+                            "Native mode combines baked map textures with a restrained static sun. Qt 6.8 cannot request anisotropic filtering; Sharp hard surfaces keeps full-resolution detail on opaque structures while leaving grass, dirt, and asphalt stable, but can shimmer while moving.")
 
                         SettingCombo {
                             label: qsTr("Lighting")
@@ -4543,8 +4567,8 @@ ApplicationWindow {
                                   "value": "bilinear" },
                                 { "label": qsTr("Trilinear"),
                                   "value": "trilinear" },
-                                { "label": qsTr("Highest available"),
-                                  "value": "anisotropic" }
+                                { "label": qsTr("Sharp hard surfaces (may shimmer)"),
+                                  "value": "sharp" }
                             ]
                             onSelected: value => {
                                 if (window.graphicsSettings)

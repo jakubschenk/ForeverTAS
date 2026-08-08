@@ -28,7 +28,8 @@ constexpr char kLightingLit[] = "lit";
 constexpr char kLightingAuthored[] = "authored";
 constexpr char kTextureFilteringBilinear[] = "bilinear";
 constexpr char kTextureFilteringTrilinear[] = "trilinear";
-constexpr char kTextureFilteringAnisotropic[] = "anisotropic";
+constexpr char kTextureFilteringSharp[] = "sharp";
+constexpr char kTextureFilteringMigrationAnisotropic[] = "anisotropic";
 
 QSettings OpenSettings(const QString &path) {
     return path.isEmpty() ? QSettings() : QSettings(path, QSettings::IniFormat);
@@ -50,7 +51,7 @@ bool IsLightingMode(const QString &value) {
 bool IsTextureFiltering(const QString &value) {
     return value == QString::fromLatin1(kTextureFilteringBilinear) ||
             value == QString::fromLatin1(kTextureFilteringTrilinear) ||
-            value == QString::fromLatin1(kTextureFilteringAnisotropic);
+            value == QString::fromLatin1(kTextureFilteringSharp);
 }
 
 bool IsMsaaSamples(int value) {
@@ -204,6 +205,11 @@ int GraphicsSettings::MsaaSamplesFromValue(const QVariant &value,
 
 QString GraphicsSettings::TextureFilteringFromString(const QString &value,
                                                    bool *repaired) {
+    if (value ==
+        QString::fromLatin1(kTextureFilteringMigrationAnisotropic)) {
+        *repaired = true;
+        return QString::fromLatin1(kDefaultTextureFiltering);
+    }
     if (IsTextureFiltering(value)) {
         *repaired = false;
         return value;

@@ -1,5 +1,7 @@
 #include "app/input_preview_binding.h"
 #include "app/search_controller.h"
+#include "mutations/replay_input_script.h"
+#include "viewer/graphics_settings.h"
 #include "viewer/race_timeline_item.h"
 #include "viewer/race_viewer_controller.h"
 
@@ -27,6 +29,7 @@
 #include <QQuickWindow>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScreen>
 #include <QSettings>
 #include <QSet>
 #include <QSGRendererInterface>
@@ -39,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -64,6 +68,9 @@ struct CaptureOptions {
     QString replayPath;
     QString outputPath;
     QString mode = QStringLiteral("textured");
+    QString textureFiltering = QStringLiteral("trilinear");
+    bool replayInputs = false;
+    bool skidmarks = true;
     double tickFraction = 0.5;
     QSize size{1280, 720};
     CameraOptions camera;
@@ -173,6 +180,10 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
             QStringLiteral("tick-fraction"),
             QStringLiteral("Timeline fraction from 0 through 1."),
             QStringLiteral("fraction"), QStringLiteral("0.5"));
+    const QCommandLineOption textureFilteringOption(
+            QStringLiteral("texture-filtering"),
+            QStringLiteral("Texture filtering: bilinear, trilinear, or sharp."),
+            QStringLiteral("filter"), QStringLiteral("trilinear"));
     const QCommandLineOption sizeOption(
             {QStringLiteral("s"), QStringLiteral("size")},
             QStringLiteral("Output size as WIDTHxHEIGHT (64..8192, aspect "
@@ -186,9 +197,17 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
             QStringLiteral("include-paths"),
             QStringLiteral("Include absolute local paths in JSON and stdout. "
                            "Paths are redacted to file names by default."));
+    const QCommandLineOption replayInputsOption(
+            QStringLiteral("replay-inputs"),
+            QStringLiteral("Extract and simulate the replay's recorded "
+                           "inputs."));
+    const QCommandLineOption disableSkidmarksOption(
+            QStringLiteral("disable-skidmarks"),
+            QStringLiteral("Disable skidmark geometry for visual A/B tests."));
     parser.addOptions({packsOption, replayOption, outputOption, modeOption,
-                       tickOption, sizeOption, cameraOption,
-                       includePathsOption});
+                       tickOption, textureFilteringOption, sizeOption, cameraOption,
+                       includePathsOption, replayInputsOption,
+                       disableSkidmarksOption});
     parser.process(application);
 
     if (!parser.isSet(packsOption) || !parser.isSet(replayOption) ||
@@ -207,7 +226,11 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
     options.outputPath =
             QFileInfo(parser.value(outputOption)).absoluteFilePath();
     options.mode = parser.value(modeOption).trimmed().toLower();
+    options.textureFiltering =
+            parser.value(textureFilteringOption).trimmed().toLower();
     options.includePaths = parser.isSet(includePathsOption);
+    options.replayInputs = parser.isSet(replayInputsOption);
+    options.skidmarks = !parser.isSet(disableSkidmarksOption);
 
     static const QStringList supportedModes{
             QStringLiteral("textured"), QStringLiteral("neutral"),
@@ -217,6 +240,17 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
         PrintError(QStringLiteral(
                 "unsupported raster mode '%1'; expected one of: %2")
                            .arg(options.mode, supportedModes.join(", ")));
+        return std::nullopt;
+    }
+
+    static const QStringList supportedTextureFiltering{
+            QStringLiteral("bilinear"), QStringLiteral("trilinear"),
+            QStringLiteral("sharp")};
+    if (!supportedTextureFiltering.contains(options.textureFiltering)) {
+        PrintError(QStringLiteral(
+                "unsupported texture filtering '%1'; expected one of: %2")
+                           .arg(options.textureFiltering,
+                                supportedTextureFiltering.join(", ")));
         return std::nullopt;
     }
 
@@ -463,7 +497,23 @@ int main(int argc, char **argv) {
 
     forevertas::app::SearchController controller;
     forevertas::viewer::RaceViewerController viewer;
+    forevertas::viewer::GraphicsSettings graphicsSettings;
+    graphicsSettings.setRenderMode(options.mode);
+    graphicsSettings.setTextureFiltering(options.textureFiltering);
+    graphicsSettings.setSkidmarksEnabled(options.skidmarks);
     forevertas::app::BindInputPreview(controller, viewer);
+    if (options.replayInputs) {
+        try {
+            controller.setBaseInputScript(QString::fromStdString(
+                    forevertas::ExtractReplayInputScript(
+                            options.packsDirectory.toUtf8().toStdString(),
+                            options.replayPath.toUtf8().toStdString())));
+        } catch (const std::exception &exception) {
+            PrintError(QStringLiteral("replay input extraction failed: %1")
+                               .arg(QString::fromUtf8(exception.what())));
+            return 1;
+        }
+    }
     forevertas::viewer::RegisterRaceViewerQmlTypes();
 
     QQmlApplicationEngine engine;
@@ -478,8 +528,10 @@ int main(int argc, char **argv) {
     engine.setInitialProperties({
             {QStringLiteral("controller"),
              QVariant::fromValue(static_cast<QObject *>(&controller))},
-            {QStringLiteral("viewer"),
-             QVariant::fromValue(static_cast<QObject *>(&viewer))}});
+             {QStringLiteral("viewer"),
+              QVariant::fromValue(static_cast<QObject *>(&viewer))},
+             {QStringLiteral("graphicsSettings"),
+              QVariant::fromValue(static_cast<QObject *>(&graphicsSettings))}});
     engine.load(QUrl::fromLocalFile(
             QStringLiteral(FOREVERTAS_SOURCE_DIR "/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) {
@@ -550,6 +602,11 @@ int main(int argc, char **argv) {
             QSize(static_cast<int>(std::lround(internalHeight * targetAspect)) +
                           1,
                   internalHeight));
+    if (QScreen *const screen = QGuiApplication::primaryScreen()) {
+        window->setScreen(screen);
+        window->setPosition(screen->availableGeometry().topLeft() +
+                            QPoint(16, 16));
+    }
     window->show();
     window->requestActivate();
 
@@ -661,13 +718,28 @@ int main(int argc, char **argv) {
         QImage candidate =
                 grab->image().convertToFormat(QImage::Format_ARGB32);
         if (candidate.size() != options.size) {
-            PrintError(QStringLiteral(
-                    "capture returned %1x%2 instead of %3x%4")
-                               .arg(candidate.width())
-                               .arg(candidate.height())
-                               .arg(options.size.width())
-                               .arg(options.size.height()));
-            return 1;
+            const double returnedAspect =
+                    static_cast<double>(candidate.width()) /
+                    static_cast<double>(candidate.height());
+            const double requestedAspect =
+                    static_cast<double>(options.size.width()) /
+                    static_cast<double>(options.size.height());
+            if (std::abs(returnedAspect - requestedAspect) > 0.002) {
+                PrintError(QStringLiteral(
+                        "capture returned %1x%2 instead of %3x%4")
+                                   .arg(candidate.width())
+                                   .arg(candidate.height())
+                                   .arg(options.size.width())
+                                   .arg(options.size.height()));
+                return 1;
+            }
+            // QQuickItemGrabResult reports physical pixels on some
+            // per-monitor-DPI setups even when a logical target size was
+            // requested. Normalize that deterministic scale here.
+            candidate = candidate.scaled(
+                    options.size, Qt::IgnoreAspectRatio,
+                    Qt::SmoothTransformation);
+            candidate.setDevicePixelRatio(1.0);
         }
         statistics = StatisticsFor(candidate);
         if (!IsBlank(candidate, statistics)) {
@@ -704,6 +776,36 @@ int main(int argc, char **argv) {
             viewport->property("sceneCameraPosition").value<QVector3D>();
     const QVector3D cameraTarget =
             viewport->property("cameraTarget").value<QVector3D>();
+    quint64 skidmarkRibbonSegments = 0u;
+    quint64 skidmarkStamps = 0u;
+    const QVariantList skidmarkPaths = viewer.skidmarkPaths();
+    for (const QVariant &path : skidmarkPaths) {
+        const QVariantMap fields = path.toMap();
+        skidmarkRibbonSegments +=
+                fields.value(QStringLiteral("ribbonSegmentCount")).toULongLong();
+        skidmarkStamps +=
+                fields.value(QStringLiteral("stampCount")).toULongLong();
+    }
+    qint64 sharpFilteringMaterials = 0;
+    qint64 sharpFilteringMipmappedMaterials = 0;
+    for (const QVariant &material : viewer.visualMaterials()) {
+        const QVariantMap fields = material.toMap();
+        const QString materialClass =
+                fields.value(QStringLiteral("materialClass")).toString();
+        const bool eligible =
+                fields.value(QStringLiteral("alphaMode")).toString() ==
+                        QStringLiteral("opaque") &&
+                materialClass != QStringLiteral("Grass") &&
+                materialClass != QStringLiteral("Dirt") &&
+                materialClass != QStringLiteral("Asphalt");
+        sharpFilteringMaterials += eligible ? 1 : 0;
+        sharpFilteringMipmappedMaterials +=
+                eligible &&
+                        fields.value(QStringLiteral("albedoGenerateMipmaps"))
+                                .toBool()
+                ? 1
+                : 0;
+    }
     const QString rendererName = QStringLiteral("ForeverTAS Qt Quick 3D raster");
     const auto evidencePath = [includePaths = options.includePaths](
                                       const QString &path) {
@@ -716,6 +818,10 @@ int main(int argc, char **argv) {
             {QStringLiteral("realRhi"), true},
             {QStringLiteral("qtVersion"), QString::fromLatin1(qVersion())},
             {QStringLiteral("mode"), options.mode},
+            {QStringLiteral("textureFiltering"), options.textureFiltering},
+            {QStringLiteral("inputSource"),
+             options.replayInputs ? QStringLiteral("recorded-replay")
+                                  : QStringLiteral("empty-preview")},
             {QStringLiteral("packsDirectory"),
              evidencePath(options.packsDirectory)},
             {QStringLiteral("replayPath"), evidencePath(options.replayPath)},
@@ -768,10 +874,22 @@ int main(int argc, char **argv) {
                           viewer.visualBatchCount()},
                          {QStringLiteral("visualMeshes"),
                           viewer.visualMeshCount()},
-                         {QStringLiteral("visualTriangles"),
-                          viewer.visualTriangleCount()},
-                         {QStringLiteral("materials"),
-                          viewer.materialCount()}}},
+                          {QStringLiteral("visualTriangles"),
+                           viewer.visualTriangleCount()},
+                          {QStringLiteral("materials"),
+                           viewer.materialCount()},
+                          {QStringLiteral("sharpFilteringMaterials"),
+                           sharpFilteringMaterials},
+                          {QStringLiteral("sharpFilteringMipmappedMaterials"),
+                           sharpFilteringMipmappedMaterials},
+                          {QStringLiteral("skidmarksEnabled"),
+                           viewer.skidmarksEnabled()},
+                          {QStringLiteral("skidmarkPaths"),
+                           viewer.skidmarkCount()},
+                          {QStringLiteral("skidmarkRibbonSegments"),
+                           static_cast<qint64>(skidmarkRibbonSegments)},
+                          {QStringLiteral("skidmarkStamps"),
+                           static_cast<qint64>(skidmarkStamps)}}},
             {QStringLiteral("rendererTelemetry"),
              QJsonObject::fromVariantMap(viewer.rendererTelemetry())},
             {QStringLiteral("image"),

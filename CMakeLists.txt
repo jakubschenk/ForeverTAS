@@ -68,7 +68,7 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 FetchContent_Declare(
     ForeverValidator
     GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
-    GIT_TAG 3ae3b86b2fa86c5c76ebf0d036d9c4cf1527b55b
+    GIT_TAG 3dca7ffa15f57696bc97d18816d036828ec9a6a9
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
