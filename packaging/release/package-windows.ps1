@@ -36,9 +36,8 @@ if ($env:CUDA_VERSION -ne "12.8.1" -or
     throw "Windows release inputs do not match the validated CUDA contract"
 }
 if ($env:FOREVERVALIDATOR_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or
-        $env:FOREVERVALIDATOR_COMMIT -cne
-            $env:FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT) {
-    throw "ForeverValidator release and CUDA object commits must be one exact lowercase SHA"
+        $env:FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') {
+    throw "ForeverValidator release and CUDA object commits must be exact lowercase SHAs"
 }
 
 $ValidatorMarker = Join-Path $ValidatorRoot ".release-source-commit"

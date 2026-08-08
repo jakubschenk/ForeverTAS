@@ -28,9 +28,9 @@ if ($Release.cuda.version -ne "12.8.1" -or
 }
 if ($Release.sources.forevervalidator.commit -cnotmatch
         '^[0-9a-f]{40}$' -or
-        $Release.sources.forevervalidator.commit -cne
-            $Release.cuda.search_object_source_commit) {
-    throw "ForeverValidator release identities must be one exact lowercase SHA"
+        $Release.cuda.search_object_source_commit -cnotmatch
+        '^[0-9a-f]{40}$') {
+    throw "ForeverValidator release identities must be exact lowercase SHAs"
 }
 
 . C:\Tools\Enter-BuildEnv.ps1

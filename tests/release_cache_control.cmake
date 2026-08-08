@@ -132,6 +132,40 @@ foreach(build_script IN ITEMS linux_build_script windows_build_script)
     require_text("${${build_script}}" "search_object_source_commit"
         "release wrapper exact Validator source guard")
 endforeach()
+if(linux_build_script MATCHES
+        "FOREVERVALIDATOR_COMMIT[^\\n]*!=[^\\n]*FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT" OR
+    linux_build_script MATCHES
+        "FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT[^\\n]*!=[^\\n]*FOREVERVALIDATOR_COMMIT")
+    message(FATAL_ERROR
+        "Linux release wrapper requires ForeverValidator commits to be equal")
+endif()
+if(windows_build_script MATCHES
+        "FOREVERVALIDATOR_COMMIT[^\\n]*-cne[^\\n]*FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT" OR
+    windows_build_script MATCHES
+        "FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT[^\\n]*-cne[^\\n]*FOREVERVALIDATOR_COMMIT")
+    message(FATAL_ERROR
+        "Windows release wrapper requires ForeverValidator commits to be equal")
+elseif(windows_build_script MATCHES
+        "\\$Release\\.sources\\.forevervalidator\\.commit[^\\n]*-cne[^\\n]*\\$Release\\.cuda\\.search_object_source_commit" OR
+    windows_build_script MATCHES
+        "\\$Release\\.cuda\\.search_object_source_commit[^\\n]*-cne[^\\n]*\\$Release\\.sources\\.forevervalidator\\.commit")
+    message(FATAL_ERROR
+        "Windows release wrapper requires release and CUDA search source commits to be equal")
+endif()
+if(linux_script MATCHES
+        "FOREVERVALIDATOR_COMMIT[^\\n]*!=[^\\n]*FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT" OR
+    linux_script MATCHES
+        "FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT[^\\n]*!=[^\\n]*FOREVERVALIDATOR_COMMIT")
+    message(FATAL_ERROR
+        "Linux package script requires ForeverValidator commits to be equal")
+endif()
+if(windows_script MATCHES
+        "FOREVERVALIDATOR_COMMIT[^\\n]*-cne[^\\n]*FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT" OR
+    windows_script MATCHES
+        "FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT[^\\n]*-cne[^\\n]*FOREVERVALIDATOR_COMMIT")
+    message(FATAL_ERROR
+        "Windows package script requires ForeverValidator commits to be equal")
+endif()
 
 require_text("${release_manifest}" "[${expected_cubins}]"
     "release manifest exact native cubin list")
@@ -141,8 +175,9 @@ require_text("${release_manifest}" "${expected_architectures}"
     "release manifest exact CMake architecture tuple")
 require_text("${release_manifest}" "${expected_architecture_key}"
     "release manifest architecture key")
-if(release_manifest MATCHES "\"tag\"[ \t]*:[ \t]*\"v0\\.2\\.2\"[^\n]*forevervalidator" OR
-   release_manifest MATCHES "search_object_output_neutral_paths")
+require_text("${release_manifest}" "\"search_object_output_neutral_paths\""
+    "release manifest carries explicit output-neutral paths")
+if(release_manifest MATCHES "\"tag\"[ \t]*:[ \t]*\"v0\\.2\\.2\"[^\n]*forevervalidator")
     message(FATAL_ERROR
         "release manifest retained a stale Validator tag or output-neutral exception")
 endif()
@@ -186,11 +221,8 @@ string(TOLOWER
     "${release_manifest}\n${release_driver}\n${linux_script}\n${windows_script}\n${linux_build_script}\n${windows_build_script}"
     release_contract_text)
 foreach(forbidden IN ITEMS
-        "search_object_output_neutral_paths"
-        "output.neutral"
         "empty.air"
-        "profil"
-        "experimental")
+        "profil")
     if(release_contract_text MATCHES "${forbidden}")
         message(FATAL_ERROR
             "release cache retained forbidden experimental marker: ${forbidden}")
@@ -261,11 +293,15 @@ with tempfile.TemporaryDirectory() as temporary:
         return path
 
     mismatch = copy.deepcopy(manifest)
-    mismatch["cuda"]["search_object_source_commit"] = "f" * 40
+    mismatch["cuda"]["search_object_source_commit"] = "g" * 40
     expect_failure(
         lambda: driver.load_manifest(write_manifest(mismatch, "mismatch.json")),
-        "must equal the ForeverValidator pin",
+        "manifest has no CUDA search-object source identity",
     )
+
+    different_identity = copy.deepcopy(manifest)
+    different_identity["cuda"]["search_object_source_commit"] = "1" * 40
+    driver.load_manifest(write_manifest(different_identity, "different-identity.json"))
 
     uppercase = copy.deepcopy(manifest)
     uppercase["sources"]["forevervalidator"]["commit"] = commit.upper()
@@ -283,7 +319,6 @@ with tempfile.TemporaryDirectory() as temporary:
     )
 
     for marker in (
-        "search_object_output_neutral_paths",
         "empty_air_certificate",
         "profiling_marker",
         "prebuilt_feature",
@@ -293,8 +328,62 @@ with tempfile.TemporaryDirectory() as temporary:
         expect_failure(
             lambda marked=marked, marker=marker: driver.load_manifest(
                 write_manifest(marked, f"{marker}.json")),
-            "CUDA has unsupported fields",
+            "has unsupported fields",
         )
+
+    empty_output_neutral_paths = copy.deepcopy(manifest)
+    empty_output_neutral_paths["cuda"]["search_object_output_neutral_paths"] = []
+    expect_failure(
+        lambda: driver.load_manifest(
+            write_manifest(empty_output_neutral_paths, "empty-paths.json")),
+        "empty CUDA output-neutral path list",
+    )
+
+    invalid_output_neutral_paths_type = copy.deepcopy(manifest)
+    invalid_output_neutral_paths_type["cuda"]["search_object_output_neutral_paths"] = {}
+    expect_failure(
+        lambda: driver.load_manifest(
+            write_manifest(invalid_output_neutral_paths_type, "invalid-type-paths.json")),
+        "valid CUDA output-neutral search paths",
+    )
+
+    duplicate_output_neutral_paths = copy.deepcopy(manifest)
+    duplicate_output_neutral_paths["cuda"]["search_object_output_neutral_paths"] = [
+        manifest["cuda"]["search_object_output_neutral_paths"][0],
+        manifest["cuda"]["search_object_output_neutral_paths"][0],
+    ]
+    expect_failure(
+        lambda: driver.load_manifest(
+            write_manifest(duplicate_output_neutral_paths, "duplicate-paths.json")),
+        "duplicate CUDA output-neutral paths",
+    )
+
+    for path in (
+        ".",
+        "..",
+        "./bad.cpp",
+        "../bad.cpp",
+        "\\bad.cpp",
+        "bad\\path.cpp",
+        "/bad.cpp",
+    ):
+        invalid_output_neutral_paths = copy.deepcopy(manifest)
+        invalid_output_neutral_paths["cuda"][
+            "search_object_output_neutral_paths"
+        ] = [path]
+        expect_failure(
+            lambda: driver.load_manifest(
+                write_manifest(invalid_output_neutral_paths, "invalid-path.json")),
+            "invalid CUDA output-neutral path",
+        )
+
+    non_string_output_neutral_paths = copy.deepcopy(manifest)
+    non_string_output_neutral_paths["cuda"]["search_object_output_neutral_paths"] = [1]
+    expect_failure(
+        lambda: driver.load_manifest(
+            write_manifest(non_string_output_neutral_paths, "non-string-path.json")),
+        "invalid CUDA output-neutral path entry",
+    )
 
     selected_bytes = json.dumps(manifest, indent=1).encode("utf-8") + b"\n\n"
     selected = root / "selected.json"
@@ -316,6 +405,7 @@ with tempfile.TemporaryDirectory() as temporary:
     fake_tas = root / "tas"
     fake_tas.mkdir()
     fake_validator.mkdir(exist_ok=True)
+    expected_output_neutral_paths = manifest["cuda"]["search_object_output_neutral_paths"]
     (fake_validator / "CMakeLists.txt").write_text(
         "project(ForeverValidator VERSION 0.2.2 LANGUAGES CXX)\n",
         encoding="utf-8",
@@ -333,6 +423,8 @@ with tempfile.TemporaryDirectory() as temporary:
             return ""
         if arguments and arguments[0] == "rev-parse" and arguments[1].endswith("^{}"):
             return tag_target
+        if arguments[:2] == ("diff", "--name-only"):
+            return "\n".join(expected_output_neutral_paths)
         raise AssertionError(f"unexpected git invocation: {arguments!r}")
 
     driver.git = fake_git
@@ -344,6 +436,24 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     (fake_tas / "CMakeLists.txt").write_text(valid_cmake, encoding="utf-8")
     driver.source_state(manifest, fake_validator)
+
+    too_many_paths = copy.deepcopy(manifest)
+    too_many_paths["cuda"]["search_object_output_neutral_paths"] = [
+        "src/engine/game/material_render_definition.cpp",
+    ]
+    expect_failure(
+        lambda: driver.source_state(too_many_paths, fake_validator),
+        "changed paths are not declared output-neutral",
+    )
+    too_few_paths = copy.deepcopy(manifest)
+    too_few_paths["cuda"]["search_object_output_neutral_paths"] = [
+        *expected_output_neutral_paths,
+        "src/engine/game/material_render_definition.cpp",
+    ]
+    expect_failure(
+        lambda: driver.source_state(too_few_paths, fake_validator),
+        "output-neutral declarations are stale",
+    )
 
     wrong_cmake = (
         valid_cmake.replace(commit, "e" * 40) +

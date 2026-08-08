@@ -51,8 +51,8 @@ if [[ "${CUDA_VERSION}" != "12.8.1" ||
     exit 2
 fi
 if [[ ! "${FOREVERVALIDATOR_COMMIT}" =~ ^[0-9a-f]{40}$ ||
-      "${FOREVERVALIDATOR_COMMIT}" != "${FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT}" ]]; then
-    printf 'ERROR: ForeverValidator release identities must be one exact lowercase SHA.\n' >&2
+      ! "${FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'ERROR: ForeverValidator release identities must be exact lowercase SHA.\n' >&2
     exit 2
 fi
 

@@ -30,8 +30,8 @@ if [[ "${CUDA_VERSION}" != "12.8.1" ||
     exit 1
 fi
 if [[ ! "${FOREVERVALIDATOR_COMMIT}" =~ ^[0-9a-f]{40}$ ||
-      "${FOREVERVALIDATOR_COMMIT}" != "${FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT}" ]]; then
-    echo "ForeverValidator release and CUDA object commits must be one exact lowercase SHA" >&2
+      ! "${FOREVERVALIDATOR_CUDA_SEARCH_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "ForeverValidator release and CUDA object commits must be exact lowercase SHA" >&2
     exit 1
 fi
 

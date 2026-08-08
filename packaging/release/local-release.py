@@ -74,6 +74,31 @@ def require_manifest_fields(
     return value
 
 
+def validate_output_neutral_paths(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise SystemExit("manifest does not contain valid CUDA output-neutral search paths")
+    if not value:
+        raise SystemExit("manifest has an empty CUDA output-neutral path list")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for candidate in value:
+        if not isinstance(candidate, str) or not candidate:
+            raise SystemExit(
+                "manifest contains an invalid CUDA output-neutral path entry")
+        if (candidate == "." or candidate == ".." or
+                candidate.startswith("./") or candidate.startswith("../") or
+                candidate.startswith(".\\") or candidate.startswith("..\\") or
+                candidate.startswith("/") or candidate.startswith("\\") or
+                "\\" in candidate):
+            raise SystemExit(
+                "manifest contains an invalid CUDA output-neutral path")
+        if candidate in seen:
+            raise SystemExit("manifest has duplicate CUDA output-neutral paths")
+        seen.add(candidate)
+        normalized.append(candidate)
+    return normalized
+
+
 def load_manifest(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as stream:
         manifest = json.load(stream)
@@ -99,7 +124,7 @@ def load_manifest(path: Path) -> dict:
         manifest["cuda"],
         {"version", "architectures", "ptx_architecture",
          "cmake_architectures", "architecture_key", "split_compile_jobs",
-         "search_object_source_commit"},
+         "search_object_source_commit", "search_object_output_neutral_paths"},
         "CUDA",
     )
     toolchains = require_manifest_fields(
@@ -132,15 +157,13 @@ def load_manifest(path: Path) -> dict:
     if cuda["split_compile_jobs"] != 4:
         raise SystemExit("manifest changed the validated CUDA split-compile value")
     search_object_source_commit = cuda.get("search_object_source_commit")
+    validate_output_neutral_paths(
+        cuda.get("search_object_output_neutral_paths"))
     validator_commit = validator_source.get("commit")
     if not VALID_40_HEX.fullmatch(validator_commit or ""):
         raise SystemExit("manifest does not contain a valid ForeverValidator commit SHA")
     if not VALID_40_HEX.fullmatch(search_object_source_commit or ""):
         raise SystemExit("manifest has no CUDA search-object source identity")
-    if search_object_source_commit != validator_commit:
-        raise SystemExit(
-            "manifest CUDA search-object source identity must equal the "
-            "ForeverValidator pin")
     if manifest["release"]["tag"] != f"v{manifest['release']['version']}":
         raise SystemExit("release tag and version do not match")
     return manifest
@@ -201,6 +224,21 @@ def source_state(manifest: dict, validator_root: Path) -> dict:
         raise SystemExit("ForeverValidator checkout does not match the manifest commit")
     search_source = manifest["cuda"]["search_object_source_commit"]
     git("cat-file", "-e", f"{search_source}^{{commit}}", cwd=validator_root)
+    changed_since_search_source = set(filter(None, git(
+        "diff", "--name-only", search_source, state["forevervalidator"],
+        cwd=validator_root,
+    ).splitlines()))
+    output_neutral_paths = set(manifest["cuda"]["search_object_output_neutral_paths"])
+    unexpected_paths = changed_since_search_source - output_neutral_paths
+    if unexpected_paths:
+        raise SystemExit(
+            "CUDA search-object source identity is stale; changed paths are not "
+            "declared output-neutral: " + ", ".join(sorted(unexpected_paths)))
+    stale_paths = output_neutral_paths - changed_since_search_source
+    if stale_paths:
+        raise SystemExit(
+            "CUDA search-object output-neutral declarations are stale: " +
+            ", ".join(sorted(stale_paths)))
     optional_tag = manifest["sources"]["forevervalidator"].get("tag")
     if optional_tag is not None:
         validator_tag_target = git("rev-parse", f"{optional_tag}^{{}}", cwd=validator_root)

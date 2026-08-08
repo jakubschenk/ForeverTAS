@@ -11,11 +11,26 @@ ApplicationWindow {
 
     required property var controller
     required property var viewer
+    property var graphicsSettings: null
 
-    property string renderMode: "textured"
+    property string renderMode: graphicsSettings
+                                ? graphicsSettings.renderMode : "textured"
     property bool codeEditorExpanded: false
-    readonly property bool rayTracingEnabled:
-        renderMode === "textured-rt"
+    // Kept as a compatibility predicate for the through-block editor overlay.
+    // The normal app no longer constructs or selects the experimental RT view.
+    readonly property bool rayTracingEnabled: false
+    readonly property bool authoredLighting: !graphicsSettings
+                                               || graphicsSettings.lightingMode
+                                                  === "authored"
+    readonly property int msaaSamples: graphicsSettings
+                                       ? graphicsSettings.msaaSamples : 2
+    readonly property string textureFiltering: graphicsSettings
+                                                ? graphicsSettings
+                                                      .textureFiltering
+                                                : "trilinear"
+    readonly property bool worldShadows: graphicsSettings
+                                         ? graphicsSettings.worldShadows
+                                         : false
     property real measuredFps: 0
     property int framesSinceSample: 0
     readonly property bool fpsSamplingEnabled:
@@ -23,6 +38,20 @@ ApplicationWindow {
         && !window.controller.running
     readonly property var settingsWheelRedirectorObject:
         settingsWheelRedirector
+
+    function setRenderMode(value) {
+        renderMode = value
+        if (graphicsSettings)
+            graphicsSettings.renderMode = value
+    }
+
+    Connections {
+        target: window.graphicsSettings
+        ignoreUnknownSignals: true
+        function onRenderModeChanged() {
+            window.renderMode = window.graphicsSettings.renderMode
+        }
+    }
 
     Binding {
         target: AppTheme
@@ -2120,33 +2149,23 @@ ApplicationWindow {
                         id: rasterMapView
                         objectName: "rasterMapView"
                         anchors.fill: parent
-                        visible: !window.rayTracingEnabled
+                        visible: true
                         camera: viewCamera
 
-                        environment: SceneEnvironment {
+                            environment: SceneEnvironment {
                             objectName: "mapEnvironment"
-                            backgroundMode: SceneEnvironment.SkyBox
-                            antialiasingMode: SceneEnvironment.MSAA
-                            antialiasingQuality: SceneEnvironment.VeryHigh
-                            tonemapMode: SceneEnvironment.TonemapModeAces
-                            probeExposure: 1.05
-                            skyboxBlurAmount: 0.0
-                            specularAAEnabled: true
-                            depthPrePassEnabled: true
-                            aoEnabled: true
-                            aoStrength: 52
-                            aoDistance: 4.5
-                            aoSoftness: 32
-                            aoBias: 0.02
-                            aoSampleRate: 4
-                            aoDither: true
-
-                            lightProbe: Texture {
-                                objectName: "daySkyTexture"
-                                source: "qrc:/environment/day_sky.png"
-                                mappingMode: Texture.LightProbe
-                                generateMipmaps: true
-                            }
+                            backgroundMode: SceneEnvironment.Color
+                            clearColor: "#7ea5c4"
+                            antialiasingMode: window.msaaSamples === 0
+                                                  ? SceneEnvironment.NoAA
+                                                  : SceneEnvironment.MSAA
+                            antialiasingQuality: window.msaaSamples >= 4
+                                                     ? SceneEnvironment.High
+                                                     : SceneEnvironment.Medium
+                            tonemapMode: window.authoredLighting
+                                         ? SceneEnvironment.TonemapModeNone
+                                         : SceneEnvironment.TonemapModeAces
+                            specularAAEnabled: !window.authoredLighting
                         }
 
                         Node {
@@ -2200,13 +2219,8 @@ ApplicationWindow {
                             eulerRotation.y: -32
                             brightness: 1.15
                             color: "#fff3d7"
-                            castsShadow: true
-                            shadowMapQuality: Light.ShadowMapQualityVeryHigh
-                            shadowMapFar: Math.max(
-                                180, Math.min(1200, viewCamera.clipFar))
-                            shadowFactor: 72
-                            shadowFilter: 8
-                            shadowBias: 0.02
+                            visible: !window.authoredLighting
+                            castsShadow: window.worldShadows
                         }
 
                         DirectionalLight {
@@ -2215,6 +2229,7 @@ ApplicationWindow {
                             eulerRotation.y: 145
                             brightness: 0.35
                             color: "#b9dbf2"
+                            visible: !window.authoredLighting
                             castsShadow: false
                         }
 
@@ -2230,40 +2245,59 @@ ApplicationWindow {
                                     id: replacementBaseMap
                                     objectName: "trackVisualBaseTexture"
                                     source: modelData.baseTexture
-                                    tilingModeHorizontal: Texture.Repeat
-                                    tilingModeVertical: Texture.Repeat
-                                    generateMipmaps: true
+                                    tilingModeHorizontal: modelData.repeat
+                                                          ? Texture.Repeat
+                                                          : Texture.ClampToEdge
+                                    tilingModeVertical: modelData.repeat
+                                                        ? Texture.Repeat
+                                                        : Texture.ClampToEdge
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.albedoGenerateMipmaps
                                     minFilter: Texture.Linear
                                     magFilter: Texture.Linear
-                                    mipFilter: Texture.Linear
+                                    mipFilter: window.textureFiltering ===
+                                               "bilinear"
+                                               ? Texture.None : Texture.Linear
                                 }
 
                                 Texture {
-                                    id: replacementNormalMap
-                                    objectName: "trackVisualNormalTexture"
+                                    id: nativeNormalMap
                                     source: modelData.normalTexture
-                                    tilingModeHorizontal: Texture.Repeat
-                                    tilingModeVertical: Texture.Repeat
-                                    generateMipmaps: true
+                                    tilingModeHorizontal:
+                                        replacementBaseMap.tilingModeHorizontal
+                                    tilingModeVertical:
+                                        replacementBaseMap.tilingModeVertical
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.normalGenerateMipmaps
                                     minFilter: Texture.Linear
                                     magFilter: Texture.Linear
-                                    mipFilter: Texture.Linear
+                                    mipFilter: replacementBaseMap.mipFilter
                                 }
 
                                 Texture {
-                                    id: replacementRoughnessMap
-                                    objectName: "trackVisualRoughnessTexture"
-                                    source: modelData.roughnessTexture
-                                    tilingModeHorizontal: Texture.Repeat
-                                    tilingModeVertical: Texture.Repeat
-                                    generateMipmaps: true
+                                    id: nativeSpecularMap
+                                    source: modelData.specularTexture
+                                    tilingModeHorizontal:
+                                        replacementBaseMap.tilingModeHorizontal
+                                    tilingModeVertical:
+                                        replacementBaseMap.tilingModeVertical
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.specularGenerateMipmaps
                                     minFilter: Texture.Linear
                                     magFilter: Texture.Linear
-                                    mipFilter: Texture.Linear
+                                    mipFilter: replacementBaseMap.mipFilter
                                 }
 
                                 lighting:
-                                    PrincipledMaterial.FragmentLighting
+                                    window.authoredLighting || modelData.unlit
+                                    ? PrincipledMaterial.NoLighting
+                                    : PrincipledMaterial.FragmentLighting
                                 baseColor: window.renderMode ===
                                            "neutral"
                                            ? "#aeb3af"
@@ -2279,44 +2313,48 @@ ApplicationWindow {
                                            "neutral"
                                            ? 0.74
                                            : modelData.roughness
-                                roughnessMap: window.renderMode === "textured"
-                                              && modelData.roughnessTexture
-                                                      .toString().length > 0
-                                              ? replacementRoughnessMap : null
-                                roughnessChannel: Material.R
                                 metalness: window.renderMode ===
                                            "neutral"
                                            ? 0
                                            : modelData.metalness
-                                normalMap: window.renderMode === "textured"
-                                           && modelData.normalTexture
-                                                   .toString().length > 0
-                                           ? replacementNormalMap : null
-                                normalStrength: window.renderMode ===
-                                                "textured"
-                                                ? modelData.normalStrength : 0
-                                specularAmount: window.renderMode ===
-                                                "neutral"
-                                                ? 0.5
-                                                : modelData.specularAmount
-                                clearcoatAmount: window.renderMode ===
-                                                 "textured"
-                                                 ? modelData.clearcoatAmount : 0
-                                clearcoatRoughnessAmount:
-                                    modelData.clearcoatRoughness
-                                transmissionFactor: window.renderMode ===
-                                                    "textured"
-                                                    ? modelData
-                                                          .transmissionFactor
-                                                    : 0
-                                indexOfRefraction: modelData.indexOfRefraction
-                                cullMode: Material.NoCulling
+                                normalMap: !window.authoredLighting
+                                           && modelData.nativeNormal
+                                           ? nativeNormalMap : null
+                                specularMap: !window.authoredLighting
+                                             && modelData.nativeSpecular
+                                             ? nativeSpecularMap : null
+                                alphaMode: modelData.alphaMode === "masked"
+                                           ? PrincipledMaterial.Mask
+                                           : (modelData.alphaMode === "blended"
+                                              || modelData.alphaMode ===
+                                                 "additive"
+                                              || modelData.alphaMode ===
+                                                 "subtractive"
+                                              ? PrincipledMaterial.Blend
+                                              : PrincipledMaterial.Opaque)
+                                // Qt Quick 3D has no subtractive equation on
+                                // PrincipledMaterial. Screen is its closest
+                                // additive mode; Multiply preserves the
+                                // intended darkening for subtractive shaders.
+                                blendMode: modelData.alphaMode === "additive"
+                                           ? PrincipledMaterial.Screen
+                                           : (modelData.alphaMode ===
+                                              "subtractive"
+                                              ? PrincipledMaterial.Multiply
+                                              : PrincipledMaterial.SourceOver)
+                                alphaCutoff: 0.5
+                                opacity: modelData.opacity
+                                cullMode: modelData.doubleSided
+                                          ? Material.NoCulling
+                                          : Material.BackFaceCulling
                                 vertexColorsEnabled:
                                     modelData.vertexColors
                                     && window.renderMode === "textured"
-                                emissiveMap: window.renderMode ===
-                                             "textured"
-                                             && modelData.emissiveStrength > 0
+                                emissiveMap: window.renderMode === "textured"
+                                             && (modelData.emissiveStrength > 0
+                                                 || modelData.unlit
+                                                 || modelData.alphaMode ===
+                                                    "additive")
                                              ? replacementBaseMap
                                              : null
                                 emissiveFactor: window.renderMode ===
@@ -2348,12 +2386,17 @@ ApplicationWindow {
                                 visible: window.viewer.loaded
                                          && window.renderMode === "textured"
                                          && modelData.defaultVisible
+                                         && modelData.materialVisible
                                 geometry: modelData.geometry
-                                castsShadows: modelData.materialClass !==
-                                              "Glass"
-                                              && modelData.materialClass !==
-                                                 "Water"
-                                receivesShadows: true
+                                castsShadows: !window.authoredLighting
+                                              && window.worldShadows
+                                              && modelData.alphaMode !==
+                                                 "blended"
+                                              && modelData.alphaMode !==
+                                                 "additive"
+                                              && modelData.alphaMode !==
+                                                 "subtractive"
+                                receivesShadows: !window.authoredLighting
 
                                 materials: sharedMaterial
                                            ? [sharedMaterial] : []
@@ -2571,21 +2614,6 @@ ApplicationWindow {
                                 }
                             }
                         }
-                    }
-
-                    GpuRayTracingView {
-                        id: gpuRayTracingView
-                        objectName: "gpuRayTracingView"
-                        anchors.fill: parent
-                        z: 1
-                        visible: window.rayTracingEnabled
-                        active: window.rayTracingEnabled
-                                && window.viewer.loaded
-                        viewer: window.viewer
-                        cameraPosition: viewport.sceneCameraPosition
-                        cameraTarget: viewport.cameraTarget
-                        cameraUp: viewCamera.up
-                        fieldOfView: viewCamera.fieldOfView
                     }
 
                     View3D {
@@ -3320,22 +3348,7 @@ ApplicationWindow {
                                     raceViewerHeader.width < 650 ? 140 : 180
                                 Layout.alignment: Qt.AlignVCenter
                                 enabled: window.viewer.loaded
-                                model: gpuRayTracingView.supported
-                                       ? [
-                                             { "text": qsTr("Textured"),
-                                               "value": "textured" },
-                                             { "text": qsTr("Textured (RT)"),
-                                               "value": "textured-rt" },
-                                             { "text": qsTr("Neutral"),
-                                               "value": "neutral" },
-                                             { "text": qsTr("Collision"),
-                                               "value": "collision" },
-                                             { "text": qsTr("Wireframe"),
-                                               "value": "wireframe" },
-                                             { "text": qsTr("High Contrast"),
-                                               "value": "material-debug" }
-                                         ]
-                                       : [
+                                model: [
                                              { "text": qsTr("Textured"),
                                                "value": "textured" },
                                              { "text": qsTr("Neutral"),
@@ -3346,19 +3359,12 @@ ApplicationWindow {
                                                "value": "wireframe" },
                                              { "text": qsTr("High Contrast"),
                                                "value": "material-debug" }
-                                         ]
+                                       ]
                                 textRole: "text"
                                 valueRole: "value"
+                                currentIndex: indexOfValue(window.renderMode)
                                 onActivated:
-                                    window.renderMode = currentValue
-
-                                ToolTip.visible:
-                                    hovered
-                                    && currentValue === "textured-rt"
-                                ToolTip.delay: 350
-                                ToolTip.text:
-                                    currentValue === "textured-rt"
-                                    ? gpuRayTracingView.status : ""
+                                    window.setRenderMode(currentValue)
                             }
 
                             ThemedButton {
@@ -4214,6 +4220,115 @@ ApplicationWindow {
                             ToolTip.text: checked
                                           ? qsTr("Use the default light theme")
                                           : qsTr("Use the dark theme")
+                        }
+                    }
+
+                    ConfigurationSection {
+                        objectName: "graphicsSettingsSection"
+                        visible: window.graphicsSettings !== null
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        title: qsTr("Graphics")
+                        description: qsTr(
+                            "Authored mode shows the map's baked texture lighting without dynamic lights. Qt 6.8 maps Highest filtering to trilinear.")
+
+                        SettingCombo {
+                            label: qsTr("Lighting")
+                            comboObjectName: "lightingModeCombo"
+                            value: window.graphicsSettings
+                                   ? window.graphicsSettings.lightingMode
+                                   : "authored"
+                            options: [
+                                { "label": qsTr("Authored / baked"),
+                                  "value": "authored" },
+                                { "label": qsTr("Dynamic lit"),
+                                  "value": "lit" }
+                            ]
+                            onSelected: value => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings.lightingMode = value
+                            }
+                        }
+
+                        SettingCombo {
+                            label: qsTr("Anti-aliasing")
+                            comboObjectName: "graphicsMsaaCombo"
+                            value: window.graphicsSettings
+                                   ? window.graphicsSettings.msaaSamples
+                                         .toString()
+                                   : "2"
+                            options: [
+                                { "label": qsTr("Off"), "value": "0" },
+                                { "label": qsTr("2x MSAA"), "value": "2" },
+                                { "label": qsTr("4x MSAA"), "value": "4" }
+                            ]
+                            onSelected: value => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings.msaaSamples =
+                                        Number(value)
+                            }
+                        }
+
+                        SettingCombo {
+                            label: qsTr("Texture filtering")
+                            comboObjectName: "textureFilteringCombo"
+                            value: window.graphicsSettings
+                                   ? window.graphicsSettings.textureFiltering
+                                   : "trilinear"
+                            options: [
+                                { "label": qsTr("Bilinear"),
+                                  "value": "bilinear" },
+                                { "label": qsTr("Trilinear"),
+                                  "value": "trilinear" },
+                                { "label": qsTr("Highest available"),
+                                  "value": "anisotropic" }
+                            ]
+                            onSelected: value => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings.textureFiltering =
+                                        value
+                            }
+                        }
+
+                        SettingSwitch {
+                            label: qsTr("Dynamic world shadows")
+                            checked: window.graphicsSettings
+                                     ? window.graphicsSettings.worldShadows
+                                     : false
+                            onToggled: checked => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings.worldShadows =
+                                        checked
+                            }
+                        }
+
+                        Label {
+                            objectName: "nativeTextureTelemetryLabel"
+                            Layout.fillWidth: true
+                            visible: window.viewer.loaded
+                            text: qsTr("%1 native | %2 fallback | %3/%4 textures | %5 memory/%6 disk hits | %7 MiB | %8 ms")
+                                  .arg(window.viewer.rendererTelemetry
+                                           .nativeMaterials ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .fallbackMaterials ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .resolvedTextures ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .referencedTextures ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .textureMemoryCacheHits ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .textureDiskCacheHits ?? 0)
+                                  .arg(Number(window.viewer.rendererTelemetry
+                                                      .estimatedTextureMiB
+                                                  ?? 0).toFixed(1))
+                                  .arg(Number(window.viewer.rendererTelemetry
+                                                      .textureLoadMs
+                                                  ?? 0).toFixed(0))
+                            color: AppTheme.textMuted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
                         }
                     }
 

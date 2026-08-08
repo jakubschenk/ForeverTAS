@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -64,13 +65,18 @@ QVector3D TransformDirection(const PhysicsSandboxTransform &transform,
            ToQt(transform.basisZ) * direction.z();
 }
 
+float TransformDeterminant(const PhysicsSandboxTransform &transform) {
+    return QVector3D::dotProduct(
+            ToQt(transform.basisX),
+            QVector3D::crossProduct(ToQt(transform.basisY),
+                                    ToQt(transform.basisZ)));
+}
+
 QVector3D TransformNormal(const PhysicsSandboxTransform &transform,
-                          const QVector3D &normal) {
+                          const QVector3D &normal, float determinant) {
     const QVector3D x = ToQt(transform.basisX);
     const QVector3D y = ToQt(transform.basisY);
     const QVector3D z = ToQt(transform.basisZ);
-    const float determinant =
-            QVector3D::dotProduct(x, QVector3D::crossProduct(y, z));
     QVector3D result;
     if (std::fabs(determinant) > 1.0e-12f) {
         result = (QVector3D::crossProduct(y, z) * normal.x() +
@@ -174,14 +180,22 @@ std::vector<VisualVertex> PrepareMesh(const PhysicsSandboxRenderMesh &mesh) {
 }
 
 struct BatchKey {
+    std::uint32_t sourceMaterialIndex = 0u;
     ReplacementMaterialClass materialClass = ReplacementMaterialClass::Unknown;
+    StaticVisualAlphaMode alphaMode = StaticVisualAlphaMode::Unknown;
     PhysicsSandboxScenePurpose purpose =
             PhysicsSandboxScenePurpose::Environment;
     bool vertexColors = false;
+    bool doubleSided = false;
     bool defaultVisible = false;
+    bool spatiallyPartitioned = false;
+    std::int64_t cellX = 0;
+    std::int64_t cellZ = 0;
 
     auto asTuple() const {
-        return std::tie(materialClass, purpose, vertexColors, defaultVisible);
+        return std::tie(sourceMaterialIndex, materialClass, alphaMode, purpose,
+                        vertexColors, doubleSided, defaultVisible,
+                        spatiallyPartitioned, cellX, cellZ);
     }
 };
 
@@ -198,13 +212,118 @@ struct BatchAccumulator {
     std::uint64_t sourceInstanceCount = 0u;
 };
 
-BatchKey MakeBatchKey(ReplacementMaterialClass materialClass,
+BatchKey MakeBatchKey(std::uint32_t sourceMaterialIndex,
+                      ReplacementMaterialClass materialClass,
+                      StaticVisualMaterialState materialState,
                       PhysicsSandboxScenePurpose purpose, bool vertexColors,
-                      bool defaultVisible) {
-    return {materialClass, purpose, vertexColors, defaultVisible};
+                      bool defaultVisible, bool spatiallyPartitioned,
+                      std::int64_t cellX, std::int64_t cellZ) {
+    return {sourceMaterialIndex,
+            materialClass,
+            materialState.alphaMode,
+            purpose,
+            vertexColors,
+            materialState.doubleSided,
+            defaultVisible,
+            spatiallyPartitioned,
+            cellX,
+            cellZ};
 }
 
-bool UsesRandomizedTerrainTiles(
+using BuildClock = std::chrono::steady_clock;
+
+std::uint64_t ElapsedNanoseconds(BuildClock::time_point begin,
+                                 BuildClock::time_point end) {
+    const auto elapsed =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+                    .count();
+    return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0u;
+}
+
+struct WorldBounds {
+    QVector3D minimum{};
+    QVector3D maximum{};
+};
+
+WorldBounds TransformBounds(const PhysicsSandboxRenderMesh &mesh,
+                            const PhysicsSandboxTransform &transform) {
+    const QVector3D minimum = ToQt(mesh.boundsMin);
+    const QVector3D maximum = ToQt(mesh.boundsMax);
+    WorldBounds result;
+    for (int corner = 0; corner < 8; ++corner) {
+        const QVector3D local(
+                (corner & 1) != 0 ? maximum.x() : minimum.x(),
+                (corner & 2) != 0 ? maximum.y() : minimum.y(),
+                (corner & 4) != 0 ? maximum.z() : minimum.z());
+        const QVector3D world = TransformPoint(transform, local);
+        if (corner == 0) {
+            result.minimum = world;
+            result.maximum = world;
+        } else {
+            ExpandBounds(world, result.minimum, result.maximum);
+        }
+    }
+    return result;
+}
+
+bool ShouldSpatiallyPartition(StaticVisualAlphaMode alphaMode) {
+    return alphaMode == StaticVisualAlphaMode::Opaque ||
+           alphaMode == StaticVisualAlphaMode::Masked;
+}
+
+std::optional<std::int64_t> CellCoordinate(double worldCoordinate,
+                                           double cellSize) {
+    if (!std::isfinite(worldCoordinate) || !std::isfinite(cellSize) ||
+        cellSize <= 0.0) {
+        return std::nullopt;
+    }
+    const double coordinate = std::floor(worldCoordinate / cellSize);
+    const double minimumCoordinate = static_cast<double>(
+            std::numeric_limits<std::int64_t>::min());
+    // INT64_MAX rounds to 2^63 as a double. Treat that rounded value as an
+    // exclusive limit so the subsequent conversion is always representable.
+    const double maximumCoordinateExclusive = -minimumCoordinate;
+    if (coordinate < minimumCoordinate ||
+        coordinate >= maximumCoordinateExclusive) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(coordinate);
+}
+
+struct SpatialCell {
+    std::int64_t x = 0;
+    std::int64_t z = 0;
+};
+
+std::optional<SpatialCell> SelectSpatialCell(const WorldBounds &bounds,
+                                             float cellSize,
+                                             StaticVisualAlphaMode alphaMode) {
+    if (!ShouldSpatiallyPartition(alphaMode)) {
+        return std::nullopt;
+    }
+    const double centerX =
+            (static_cast<double>(bounds.minimum.x()) + bounds.maximum.x()) *
+            0.5;
+    const double centerZ =
+            (static_cast<double>(bounds.minimum.z()) + bounds.maximum.z()) *
+            0.5;
+    const auto cellX = CellCoordinate(centerX, cellSize);
+    const auto cellZ = CellCoordinate(centerZ, cellSize);
+    if (!cellX.has_value() || !cellZ.has_value()) {
+        return std::nullopt;
+    }
+    return SpatialCell{*cellX, *cellZ};
+}
+
+StaticVisualMaterialState MaterialStateFor(
+        const StaticVisualBatchOptions &options,
+        std::uint32_t materialIndex) {
+    return materialIndex < options.materialStates.size()
+                   ? options.materialStates[materialIndex]
+                   : StaticVisualMaterialState{};
+}
+
+[[maybe_unused]] bool UsesRandomizedTerrainTiles(
         ReplacementMaterialClass materialClass,
         PhysicsSandboxScenePurpose purpose) {
     if (materialClass != ReplacementMaterialClass::Grass &&
@@ -415,7 +534,7 @@ void ApplyUvRotation(VisualVertex &vertex, float u, float v,
     }
 }
 
-void ApplyWorldUvProjection(VisualVertex &vertex,
+[[maybe_unused]] void ApplyWorldUvProjection(VisualVertex &vertex,
                             const QVector3D &position,
                             const QVector3D &normal,
                             float scale,
@@ -696,14 +815,17 @@ void FlattenAxisAlignedNormal(std::vector<VisualVertex> &polygon,
 }
 
 VisualVertex TransformVertex(const VisualVertex &source,
-                             const PhysicsSandboxTransform &transform) {
+                             const PhysicsSandboxTransform &transform,
+                             float determinant) {
     VisualVertex vertex = source;
     const QVector3D position = TransformPoint(
             transform,
             {source.position[0], source.position[1], source.position[2]});
     const QVector3D normal =
-            TransformNormal(transform, {source.normal[0], source.normal[1],
-                                        source.normal[2]});
+            TransformNormal(transform,
+                            {source.normal[0], source.normal[1],
+                             source.normal[2]},
+                            determinant);
     QVector3D tangent = TransformDirection(
             transform,
             {source.tangent[0], source.tangent[1], source.tangent[2]});
@@ -792,8 +914,10 @@ void AppendInstance(BatchAccumulator &batch,
     }
     const std::uint32_t baseVertex =
             static_cast<std::uint32_t>(batch.vertices.size());
+    const float transformDeterminant = TransformDeterminant(transform);
     for (const VisualVertex &source : sourceVertices) {
-        VisualVertex vertex = TransformVertex(source, transform);
+        VisualVertex vertex =
+                TransformVertex(source, transform, transformDeterminant);
         const QVector3D position(vertex.position[0], vertex.position[1],
                                  vertex.position[2]);
         const QVector3D normal(vertex.normal[0], vertex.normal[1],
@@ -801,8 +925,12 @@ void AppendInstance(BatchAccumulator &batch,
         QVector3D tangent(vertex.tangent[0], vertex.tangent[1],
                           vertex.tangent[2]);
         if (worldUvScale > 0.0f) {
-            ApplyWorldUvProjection(vertex, position, normal, worldUvScale,
-                                   tangent);
+            // This is the precise legacy PDiff mapping used by the game and
+            // gbx3d: world.xz / 16. It is deliberately not a dominant-axis
+            // triplanar projection and does not randomize individual tiles.
+            vertex.uv0[0] = position.x() * worldUvScale;
+            vertex.uv0[1] = position.z() * worldUvScale;
+            tangent = QVector3D(1.0f, 0.0f, 0.0f);
         }
         tangent -= normal * QVector3D::dotProduct(normal, tangent);
         tangent = tangent.lengthSquared() > 1.0e-12f
@@ -813,13 +941,22 @@ void AppendInstance(BatchAccumulator &batch,
         vertex.tangent[2] = tangent.z();
         AppendVertex(batch, vertex);
     }
-    for (std::uint32_t index : sourceIndices) {
-        batch.indices.push_back(baseVertex + index);
+    const bool reverseWinding = transformDeterminant < 0.0f;
+    if (reverseWinding && sourceIndices.size() % 3u == 0u) {
+        for (std::size_t index = 0u; index < sourceIndices.size(); index += 3u) {
+            batch.indices.push_back(baseVertex + sourceIndices[index]);
+            batch.indices.push_back(baseVertex + sourceIndices[index + 2u]);
+            batch.indices.push_back(baseVertex + sourceIndices[index + 1u]);
+        }
+    } else {
+        for (std::uint32_t index : sourceIndices) {
+            batch.indices.push_back(baseVertex + index);
+        }
     }
     ++batch.sourceInstanceCount;
 }
 
-void AppendRandomizedTiledInstance(
+[[maybe_unused]] void AppendRandomizedTiledInstance(
         BatchAccumulator &batch,
         const std::vector<VisualVertex> &sourceVertices,
         const std::vector<std::uint32_t> &sourceIndices,
@@ -827,8 +964,10 @@ void AppendRandomizedTiledInstance(
         TerrainCoverage *coverage) {
     std::vector<VisualVertex> vertices;
     vertices.reserve(sourceVertices.size());
+    const float transformDeterminant = TransformDeterminant(transform);
     for (const VisualVertex &source : sourceVertices) {
-        vertices.push_back(TransformVertex(source, transform));
+        vertices.push_back(
+                TransformVertex(source, transform, transformDeterminant));
     }
     // Only earlier instances cover this one. Triangles within one authored
     // mesh retain their original topology until the whole instance is done.
@@ -1044,13 +1183,19 @@ bool IsDefaultVisualInstance(PhysicsSandboxScenePurpose purpose,
 
 StaticVisualBatchResult
 BuildStaticVisualBatches(const PhysicsSandboxRenderScene &scene) {
+    return BuildStaticVisualBatches(scene, StaticVisualBatchOptions{});
+}
+
+StaticVisualBatchResult BuildStaticVisualBatches(
+        const PhysicsSandboxRenderScene &scene,
+        const StaticVisualBatchOptions &options) {
+    const BuildClock::time_point buildStarted = BuildClock::now();
     StaticVisualBatchResult result;
     result.sourceMeshCount = scene.meshes.size();
     std::vector<std::optional<std::vector<VisualVertex>>> preparedMeshes(
             scene.meshes.size());
 
     std::map<BatchKey, BatchAccumulator> accumulators;
-    std::map<BatchKey, TerrainCoverage> terrainCoverage;
     std::set<DuplicateInstanceKey> seenInstances;
     bool hasDefaultBounds = false;
     for (const PhysicsSandboxRenderInstance &instance : scene.instances) {
@@ -1084,6 +1229,22 @@ BuildStaticVisualBatches(const PhysicsSandboxRenderScene &scene) {
                     mesh.indices.size() / 3u;
             continue;
         }
+        result.telemetry.acceptedSourceTriangleCount +=
+                mesh.indices.size() / 3u;
+        const WorldBounds worldBounds =
+                TransformBounds(mesh, instance.worldTransform);
+        const StaticVisualMaterialState materialState =
+                MaterialStateFor(options, instance.materialIndex);
+        const std::optional<SpatialCell> spatialCell = SelectSpatialCell(
+                worldBounds, options.cellSize, materialState.alphaMode);
+        if (spatialCell.has_value()) {
+            ++result.telemetry.spatiallyPartitionedInstanceCount;
+        }
+        if (materialState.alphaMode == StaticVisualAlphaMode::Unknown) {
+            ++result.telemetry.unknownAlphaInstanceCount;
+        }
+
+        const BuildClock::time_point classificationStarted = BuildClock::now();
         const MaterialSemanticContext context{
                 instance.provenance.blockName,
                 instance.provenance.descriptorPath,
@@ -1092,54 +1253,47 @@ BuildStaticVisualBatches(const PhysicsSandboxRenderScene &scene) {
                 IsGrassGroundCover(mesh, instance)};
         const ReplacementMaterialClass materialClass = ClassifyMaterial(
                 scene.materials[instance.materialIndex], context);
-        const ReplacementMaterial replacement = ReplacementFor(materialClass);
+        result.telemetry.materialClassificationNanoseconds +=
+                ElapsedNanoseconds(classificationStarted, BuildClock::now());
         const bool defaultVisible = IsDefaultVisualInstance(
                 instance.purpose, instance.provenance.blockName);
-        const BatchKey key =
-                MakeBatchKey(materialClass, instance.purpose,
-                             mesh.hasVertexColors, defaultVisible);
+        const BatchKey key = MakeBatchKey(
+                instance.materialIndex, materialClass, materialState,
+                instance.purpose, mesh.hasVertexColors, defaultVisible,
+                spatialCell.has_value(),
+                spatialCell.has_value() ? spatialCell->x : 0,
+                spatialCell.has_value() ? spatialCell->z : 0);
+
+        const BuildClock::time_point geometryStarted = BuildClock::now();
         auto &preparedMesh = preparedMeshes[instance.meshIndex];
         if (!preparedMesh.has_value()) {
             preparedMesh.emplace(PrepareMesh(mesh));
         }
-        if (UsesRandomizedTerrainTiles(materialClass, instance.purpose)) {
-            AppendRandomizedTiledInstance(
-                    accumulators[key], *preparedMesh,
-                    mesh.indices, instance.worldTransform,
-                    replacement.worldUvScale,
-                    instance.purpose == PhysicsSandboxScenePurpose::Clip
-                            ? &terrainCoverage[key]
-                            : nullptr);
-        } else {
-            AppendInstance(accumulators[key],
-                           *preparedMesh, mesh.indices,
-                           instance.worldTransform, replacement.worldUvScale);
-        }
+        AppendInstance(accumulators[key], *preparedMesh, mesh.indices,
+                       instance.worldTransform,
+                       materialState.worldXz ? (1.0f / 16.0f) : 0.0f);
+        result.telemetry.geometryBuildNanoseconds +=
+                ElapsedNanoseconds(geometryStarted, BuildClock::now());
 
         if (defaultVisible) {
             ++result.defaultVisibleInstanceCount;
             result.defaultTriangleCount += mesh.indices.size() / 3u;
-            const QVector3D minimum = ToQt(mesh.boundsMin);
-            const QVector3D maximum = ToQt(mesh.boundsMax);
-            for (int corner = 0; corner < 8; ++corner) {
-                const QVector3D local(
-                        (corner & 1) != 0 ? maximum.x() : minimum.x(),
-                        (corner & 2) != 0 ? maximum.y() : minimum.y(),
-                        (corner & 4) != 0 ? maximum.z() : minimum.z());
-                const QVector3D world =
-                        TransformPoint(instance.worldTransform, local);
-                if (!hasDefaultBounds) {
-                    result.defaultBoundsMin = world;
-                    result.defaultBoundsMax = world;
-                    hasDefaultBounds = true;
-                } else {
-                    ExpandBounds(world, result.defaultBoundsMin,
-                                 result.defaultBoundsMax);
-                }
+            if (!hasDefaultBounds) {
+                result.defaultBoundsMin = worldBounds.minimum;
+                result.defaultBoundsMax = worldBounds.maximum;
+                hasDefaultBounds = true;
+            } else {
+                ExpandBounds(worldBounds.minimum, result.defaultBoundsMin,
+                             result.defaultBoundsMax);
+                ExpandBounds(worldBounds.maximum, result.defaultBoundsMin,
+                             result.defaultBoundsMax);
             }
         }
     }
 
+    const BuildClock::time_point finalizationStarted = BuildClock::now();
+    std::set<std::uint32_t> submittedMaterials;
+    std::set<std::pair<std::int64_t, std::int64_t>> populatedSpatialCells;
     result.batches.reserve(accumulators.size());
     for (auto &[key, accumulator] : accumulators) {
         if (accumulator.indices.empty()) {
@@ -1157,13 +1311,35 @@ BuildStaticVisualBatches(const PhysicsSandboxRenderScene &scene) {
         batch.boundsMin = accumulator.boundsMin;
         batch.boundsMax = accumulator.boundsMax;
         batch.materialClass = key.materialClass;
+        batch.sourceMaterialIndex = key.sourceMaterialIndex;
+        batch.alphaMode = key.alphaMode;
         batch.purpose = key.purpose;
         batch.hasVertexColors = key.vertexColors;
+        batch.doubleSided = key.doubleSided;
         batch.defaultVisible = key.defaultVisible;
+        batch.spatiallyPartitioned = key.spatiallyPartitioned;
+        batch.cellX = key.cellX;
+        batch.cellZ = key.cellZ;
         batch.sourceInstanceCount = accumulator.sourceInstanceCount;
         batch.triangleCount = accumulator.indices.size() / 3u;
+        result.telemetry.submittedTriangleCount += batch.triangleCount;
+        submittedMaterials.insert(key.sourceMaterialIndex);
+        if (key.spatiallyPartitioned) {
+            ++result.telemetry.spatialBatchCount;
+            populatedSpatialCells.emplace(key.cellX, key.cellZ);
+        } else {
+            ++result.telemetry.unpartitionedBatchCount;
+        }
         result.batches.push_back(std::move(batch));
     }
+    result.telemetry.submittedBatchCount = result.batches.size();
+    result.telemetry.submittedMaterialCount = submittedMaterials.size();
+    result.telemetry.populatedSpatialCellCount =
+            populatedSpatialCells.size();
+    result.telemetry.finalizationNanoseconds = ElapsedNanoseconds(
+            finalizationStarted, BuildClock::now());
+    result.telemetry.totalBuildNanoseconds =
+            ElapsedNanoseconds(buildStarted, BuildClock::now());
     return result;
 }
 

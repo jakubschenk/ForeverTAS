@@ -166,8 +166,8 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
             QStringLiteral("png"));
     const QCommandLineOption modeOption(
             {QStringLiteral("m"), QStringLiteral("mode")},
-            QStringLiteral("Mode: textured, textured-rt, neutral, collision, "
-                           "wireframe, or material-debug."),
+            QStringLiteral("Mode: textured, neutral, collision, wireframe, "
+                           "or material-debug."),
             QStringLiteral("mode"), QStringLiteral("textured"));
     const QCommandLineOption tickOption(
             QStringLiteral("tick-fraction"),
@@ -210,8 +210,7 @@ std::optional<CaptureOptions> ParseOptions(QCoreApplication &application) {
     options.includePaths = parser.isSet(includePathsOption);
 
     static const QStringList supportedModes{
-            QStringLiteral("textured"), QStringLiteral("textured-rt"),
-            QStringLiteral("neutral"),
+            QStringLiteral("textured"), QStringLiteral("neutral"),
             QStringLiteral("collision"), QStringLiteral("wireframe"),
             QStringLiteral("material-debug")};
     if (!supportedModes.contains(options.mode)) {
@@ -494,23 +493,15 @@ int main(int argc, char **argv) {
             FindRequired<QQuickItem>(root, QStringLiteral("raceViewport"));
     QQuickItem *const rasterView =
             FindRequired<QQuickItem>(root, QStringLiteral("rasterMapView"));
-    QQuickItem *const rayTracingView = FindRequired<QQuickItem>(
-            root, QStringLiteral("gpuRayTracingView"));
     QObject *const rasterEnvironment = FindRequired<QObject>(
             root, QStringLiteral("mapEnvironment"));
     if (window == nullptr || viewport == nullptr || rasterView == nullptr ||
-        rayTracingView == nullptr || rasterEnvironment == nullptr) {
+        rasterEnvironment == nullptr) {
         PrintError(QStringLiteral(
                 "Main.qml did not expose the viewport capture items"));
         return 1;
     }
-    const bool rayTracing = options.mode == QStringLiteral("textured-rt");
-    QQuickItem *const captureView = rayTracing ? rayTracingView : rasterView;
-    if (rayTracing && !rayTracingView->property("supported").toBool()) {
-        PrintError(QStringLiteral("textured-rt is unavailable: %1")
-                           .arg(rayTracingView->property("status").toString()));
-        return 1;
-    }
+    QQuickItem *const captureView = rasterView;
 
     QObject::connect(
             window, &QQuickWindow::beforeRendering, window,
@@ -614,22 +605,6 @@ int main(int argc, char **argv) {
     HideCaptureChrome(root);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
 
-    if (rayTracing &&
-        !WaitUntil(
-                [&]() {
-                    window->requestUpdate();
-                    return rayTracingView->isVisible() &&
-                            rayTracingView->property("active").toBool() &&
-                            !rayTracingView->property("status")
-                                     .toString()
-                                     .isEmpty();
-                },
-                kRenderTimeoutMs)) {
-        PrintError(QStringLiteral("textured-rt did not become active: %1")
-                           .arg(rayTracingView->property("status").toString()));
-        return 1;
-    }
-
     const double sourceAspect = captureView->height() > 0.0
             ? captureView->width() / captureView->height()
             : 0.0;
@@ -669,8 +644,6 @@ int main(int argc, char **argv) {
     }
 
     QImage image;
-    QImage previousRayTracingCandidate;
-    int nonBlankRayTracingGrabs = 0;
     ImageStatistics statistics;
     QElapsedTimer captureTimer;
     captureTimer.start();
@@ -698,20 +671,6 @@ int main(int argc, char **argv) {
         }
         statistics = StatisticsFor(candidate);
         if (!IsBlank(candidate, statistics)) {
-            if (rayTracing) {
-                ++nonBlankRayTracingGrabs;
-                const bool stable =
-                        !previousRayTracingCandidate.isNull() &&
-                        candidate == previousRayTracingCandidate;
-                previousRayTracingCandidate = candidate;
-                if (nonBlankRayTracingGrabs <= 2 || !stable) {
-                    captureView->update();
-                    window->requestUpdate();
-                    QCoreApplication::processEvents(
-                            QEventLoop::AllEvents, 50);
-                    continue;
-                }
-            }
             image = std::move(candidate);
             break;
         }
@@ -745,15 +704,7 @@ int main(int argc, char **argv) {
             viewport->property("sceneCameraPosition").value<QVector3D>();
     const QVector3D cameraTarget =
             viewport->property("cameraTarget").value<QVector3D>();
-    const QVector3D boundRayTracingPosition =
-            rayTracingView->property("cameraPosition").value<QVector3D>();
-    const QVector3D boundRayTracingTarget =
-            rayTracingView->property("cameraTarget").value<QVector3D>();
-    const QVector3D boundRayTracingUp =
-            rayTracingView->property("cameraUp").value<QVector3D>();
-    const QString rendererName = rayTracing
-            ? QStringLiteral("ForeverTAS QRhi compute ray tracer")
-            : QStringLiteral("ForeverTAS Qt Quick 3D raster");
+    const QString rendererName = QStringLiteral("ForeverTAS Qt Quick 3D raster");
     const auto evidencePath = [includePaths = options.includePaths](
                                       const QString &path) {
         return includePaths ? path : QFileInfo(path).fileName();
@@ -782,13 +733,11 @@ int main(int argc, char **argv) {
             {QStringLiteral("isolatedSettings"), true},
             {QStringLiteral("captureItem"), captureView->objectName()},
             {QStringLiteral("rayTracing"),
-             QJsonObject{{QStringLiteral("requested"), rayTracing},
-                         {QStringLiteral("supported"),
-                          rayTracingView->property("supported").toBool()},
-                         {QStringLiteral("active"),
-                          rayTracingView->property("active").toBool()},
-                         {QStringLiteral("status"),
-                          rayTracingView->property("status").toString()}}},
+             QJsonObject{
+                     {QStringLiteral("requested"), false},
+                     {QStringLiteral("supported"), false},
+                     {QStringLiteral("active"), false},
+                     {QStringLiteral("status"), QStringLiteral("disabled")}}},
             {QStringLiteral("size"),
              QJsonObject{{QStringLiteral("width"), image.width()},
                          {QStringLiteral("height"), image.height()},
@@ -807,14 +756,13 @@ int main(int argc, char **argv) {
                          {QStringLiteral("target"),
                           VectorJson(cameraTarget)},
                          {QStringLiteral("rayTracingPosition"),
-                          VectorJson(boundRayTracingPosition)},
+                          VectorJson(cameraPosition)},
                          {QStringLiteral("rayTracingTarget"),
-                          VectorJson(boundRayTracingTarget)},
+                          VectorJson(cameraTarget)},
                          {QStringLiteral("rayTracingUp"),
-                          VectorJson(boundRayTracingUp)},
+                          VectorJson(QVector3D(0.0f, 1.0f, 0.0f))},
                          {QStringLiteral("rayTracingFieldOfView"),
-                          rayTracingView->property("fieldOfView")
-                                  .toDouble()}}},
+                          options.camera.fieldOfView}}},
             {QStringLiteral("scene"),
              QJsonObject{{QStringLiteral("visualBatches"),
                           viewer.visualBatchCount()},

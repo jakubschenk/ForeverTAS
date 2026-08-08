@@ -52,9 +52,6 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
 if(UNIX AND NOT APPLE)
     find_package(Qt6 6.5 REQUIRED COMPONENTS DBus)
 endif()
-if(Qt6_VERSION VERSION_GREATER_EQUAL 6.7)
-    find_package(Qt6 QUIET COMPONENTS GuiPrivate ShaderTools)
-endif()
 if(BUILD_TESTING)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 endif()
@@ -71,7 +68,7 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 FetchContent_Declare(
     ForeverValidator
     GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
-    GIT_TAG 93bcee7244b8031596e4fe0f88fa75998cfa62d2
+    GIT_TAG 12fdc1bba0e04d0df3276906423cf7cf1b3f2301
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
@@ -144,12 +141,18 @@ add_library(forevertas_gui STATIC
     src/app/compact_number_format.h
     src/app/system_file_dialog.cpp
     src/app/system_file_dialog.h
-    src/viewer/gpu_ray_tracing_view.cpp
-    src/viewer/gpu_ray_tracing_view.h
     src/viewer/custom_volume_geometry.cpp
     src/viewer/custom_volume_geometry.h
     src/viewer/material_classifier.cpp
     src/viewer/material_classifier.h
+    src/viewer/native_material.cpp
+    src/viewer/native_material.h
+    src/viewer/native_material_loader.cpp
+    src/viewer/native_material_loader.h
+    src/viewer/native_texture_cache.cpp
+    src/viewer/native_texture_cache.h
+    src/viewer/graphics_settings.cpp
+    src/viewer/graphics_settings.h
     src/viewer/race_geometry.cpp
     src/viewer/race_geometry.h
     src/viewer/ray_tracing_scene.cpp
@@ -297,14 +300,8 @@ else()
 endif()
 set_target_properties(forevertas-simulation-debug-worker PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
-if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
-    target_compile_definitions(forevertas_gui PUBLIC
-        FOREVERTAS_GPU_RAY_TRACING=1)
-    target_link_libraries(forevertas_gui PRIVATE Qt6::GuiPrivate)
-else()
-    target_compile_definitions(forevertas_gui PUBLIC
-        FOREVERTAS_GPU_RAY_TRACING=0)
-endif()
+target_compile_definitions(forevertas_gui PUBLIC
+    FOREVERTAS_GPU_RAY_TRACING=0)
 
 qt_add_executable(forevertas
     src/app/main.cpp)
@@ -391,15 +388,6 @@ qt_add_resources(forevertas "environment-textures"
     PREFIX "/environment"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/environment"
     FILES ${FOREVERTAS_ENVIRONMENT_TEXTURES})
-if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
-    qt_add_shaders(forevertas "ray-tracing-shaders"
-        PREFIX "/raytracing"
-        GLSL "310 es,430"
-        FILES
-            shaders/raytrace.comp
-            shaders/raytrace_present.vert
-            shaders/raytrace_present.frag)
-endif()
 target_link_libraries(forevertas PRIVATE
     forevertas_gui
     Qt6::Gui
@@ -449,6 +437,11 @@ if(WIN32)
         set(FOREVERTAS_WINDOWS_MSVC_RUNTIME_DIR
             "$ENV{VCToolsRedistDir}/x64/Microsoft.VC143.CRT")
     endif()
+    # VsDevCmd exposes VCToolsRedistDir with native backslashes. Normalize the
+    # value before globbing so generated cmake_install.cmake does not contain
+    # invalid escapes such as `C:\Program Files`.
+    file(TO_CMAKE_PATH "${FOREVERTAS_WINDOWS_MSVC_RUNTIME_DIR}"
+        FOREVERTAS_WINDOWS_MSVC_RUNTIME_DIR)
     if(NOT IS_DIRECTORY "${FOREVERTAS_WINDOWS_MSVC_RUNTIME_DIR}")
         message(FATAL_ERROR
             "FOREVERTAS_WINDOWS_MSVC_RUNTIME_DIR must point to the "
@@ -640,16 +633,6 @@ if(BUILD_TESTING)
         PREFIX "/environment"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/environment"
         FILES ${FOREVERTAS_ENVIRONMENT_TEXTURES})
-    if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
-        qt_add_shaders(forevertas-renderer-capture
-            "renderer-capture-ray-tracing-shaders"
-            PREFIX "/raytracing"
-            GLSL "310 es,430"
-            FILES
-                shaders/raytrace.comp
-                shaders/raytrace_present.vert
-                shaders/raytrace_present.frag)
-    endif()
     target_compile_definitions(forevertas-renderer-capture PRIVATE
         FOREVERTAS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(forevertas-renderer-capture PRIVATE
@@ -660,6 +643,18 @@ if(BUILD_TESTING)
         Qt6::Quick3D
         Qt6::QuickControls2
         Qt6::Widgets)
+
+    add_executable(forevertas-graphics-settings-tests
+        tests/graphics_settings_tests.cpp)
+    target_link_libraries(forevertas-graphics-settings-tests PRIVATE
+        forevertas_gui
+        Qt6::Core)
+
+    add_executable(forevertas-native-material-texture-tests
+        tests/native_material_texture_tests.cpp)
+    target_link_libraries(forevertas-native-material-texture-tests PRIVATE
+        forevertas_gui
+        Qt6::Gui)
 
     add_executable(forevertas-whiteboard-tests
         tests/whiteboard_tests.cpp)
@@ -680,6 +675,10 @@ if(BUILD_TESTING)
         target_compile_options(forevertas-renderer-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-renderer-capture PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-graphics-settings-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-native-material-texture-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-whiteboard-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
@@ -705,6 +704,10 @@ if(BUILD_TESTING)
         RESOURCE_LOCK controller-settings)
     add_test(NAME forevertas-renderer
              COMMAND forevertas-renderer-tests)
+    add_test(NAME forevertas-graphics-settings
+             COMMAND forevertas-graphics-settings-tests)
+    add_test(NAME forevertas-native-material-texture
+             COMMAND forevertas-native-material-texture-tests)
     add_test(NAME forevertas-whiteboard
              COMMAND forevertas-whiteboard-tests)
     set_tests_properties(forevertas-renderer PROPERTIES
@@ -963,7 +966,15 @@ if(BUILD_TESTING)
                  COMMAND forevertas-viewer-qml-smoke
                      "${FOREVERTAS_TEST_PACK_DIRECTORY}"
                      "${FOREVERTAS_TEST_REPLAY}")
+        add_test(NAME forevertas-native-renderer-qml
+                 COMMAND forevertas-viewer-qml-smoke
+                     "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                     "${FOREVERTAS_TEST_REPLAY}"
+                     --renderer-only)
         set_tests_properties(forevertas-viewer-qml PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software"
+            TIMEOUT 180)
+        set_tests_properties(forevertas-native-renderer-qml PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software"
             TIMEOUT 180)
     endif()

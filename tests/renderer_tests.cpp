@@ -25,7 +25,10 @@ using forevertas::viewer::ClassifyMaterial;
 using forevertas::viewer::MaterialSemanticContext;
 using forevertas::viewer::ReplacementFor;
 using forevertas::viewer::ReplacementMaterialClass;
+using forevertas::viewer::StaticVisualAlphaMode;
 using forevertas::viewer::StaticVisualBatch;
+using forevertas::viewer::StaticVisualBatchOptions;
+using forevertas::viewer::StaticVisualMaterialState;
 using forevervalidator::experimental::PhysicsSandboxRenderInstance;
 using forevervalidator::experimental::PhysicsSandboxRenderLayer;
 using forevervalidator::experimental::PhysicsSandboxRenderMaterial;
@@ -689,9 +692,7 @@ bool TestStaticBatching() {
                 static_cast<std::size_t>(grassClipBatch->vertices.size()) /
                 (FloatCount * sizeof(float));
         bool uvInsideTile = true;
-        bool hasUTangent = false;
-        bool hasVTangent = false;
-        bool hasFlatNormals = true;
+        bool authoredNormalsPreserved = true;
         for (std::size_t vertexIndex = 0u; vertexIndex < vertexCount;
              ++vertexIndex) {
             const float *vertex = vertices + vertexIndex * FloatCount;
@@ -699,29 +700,10 @@ bool TestStaticBatching() {
                             vertex[9] <= 1.001f &&
                             vertex[10] >= -0.001f &&
                             vertex[10] <= 1.001f;
-            hasUTangent |= std::fabs(vertex[6]) > 0.9f;
-            hasVTangent |= std::fabs(vertex[8]) > 0.9f;
-            hasFlatNormals &= std::fabs(vertex[3]) < 0.001f &&
-                    std::fabs(vertex[4] - 1.0f) < 0.001f &&
+            authoredNormalsPreserved &=
+                    std::fabs(vertex[3] - 0.312249f) < 0.001f &&
+                    std::fabs(vertex[4] - 0.95f) < 0.001f &&
                     std::fabs(vertex[5]) < 0.001f;
-        }
-        const auto *indices = reinterpret_cast<const std::uint32_t *>(
-                grassClipBatch->indices.constData());
-        const std::size_t indexCount =
-                static_cast<std::size_t>(grassClipBatch->indices.size()) /
-                sizeof(std::uint32_t);
-        float projectedArea = 0.0f;
-        bool hasDegenerateTriangle = false;
-        for (std::size_t index = 0u; index + 2u < indexCount; index += 3u) {
-            const float *a = vertices + indices[index] * FloatCount;
-            const float *b = vertices + indices[index + 1u] * FloatCount;
-            const float *c = vertices + indices[index + 2u] * FloatCount;
-            const float area =
-                    std::fabs((b[0] - a[0]) * (c[2] - a[2]) -
-                              (b[2] - a[2]) * (c[0] - a[0])) *
-                    0.5f;
-            projectedArea += area;
-            hasDegenerateTriangle |= area < 0.0001f;
         }
         const auto repeatedGrassClipBatch = std::find_if(
                 repeat.batches.cbegin(), repeat.batches.cend(),
@@ -733,18 +715,17 @@ bool TestStaticBatching() {
                            batch.defaultVisible;
                 });
         okay &= Check(
-                grassClipBatch->triangleCount > 1u &&
-                        vertexCount > 3u && uvInsideTile && hasUTangent &&
-                        hasVTangent && hasFlatNormals &&
-                        !hasDegenerateTriangle &&
-                        std::fabs(projectedArea - 896.0f) < 0.01f &&
+                grassClipBatch->sourceInstanceCount == 2u &&
+                        grassClipBatch->triangleCount == 2u &&
+                        vertexCount == 6u && uvInsideTile &&
+                        authoredNormalsPreserved &&
                         repeatedGrassClipBatch != repeat.batches.cend() &&
                         grassClipBatch->vertices ==
                                 repeatedGrassClipBatch->vertices &&
                         grassClipBatch->indices ==
                                 repeatedGrassClipBatch->indices,
-                "grass ground did not receive stable, overlap-free randomized "
-                "four-meter tiles with geometric flat normals");
+                "grass ground did not preserve authored UV geometry without "
+                "randomized remeshing");
     }
     const auto dirtBatch = std::find_if(
             result.batches.cbegin(), result.batches.cend(),
@@ -764,13 +745,13 @@ bool TestStaticBatching() {
             });
     okay &= Check(
             dirtBatch != result.batches.cend() &&
-                    dirtBatch->triangleCount > 1u &&
-                    dirtBatch->vertices.size() >
+                    dirtBatch->triangleCount == 1u &&
+                    dirtBatch->vertices.size() ==
                             static_cast<qsizetype>(3u * 17u * sizeof(float)) &&
                     repeatedDirtBatch != repeat.batches.cend() &&
                     dirtBatch->vertices == repeatedDirtBatch->vertices &&
                     dirtBatch->indices == repeatedDirtBatch->indices,
-            "dirt ground did not receive stable randomized four-meter tiles");
+            "dirt ground was unexpectedly expanded into randomized tiles");
     if (turboBatch != result.batches.cend()) {
         constexpr std::size_t FloatCount = 17u;
         const auto *vertices = reinterpret_cast<const float *>(
@@ -884,6 +865,210 @@ bool TestStaticBatching() {
     return okay;
 }
 
+bool TestSpatialBatchingAndTelemetry() {
+    PhysicsSandboxRenderScene scene;
+    scene.meshes.push_back(TriangleMesh());
+    for (std::uint32_t materialIndex = 0u; materialIndex < 6u;
+         ++materialIndex) {
+        PhysicsSandboxRenderMaterial material;
+        material.id = 100u + materialIndex;
+        material.surfaceMaterialId = 0u;
+        scene.materials.push_back(std::move(material));
+    }
+
+    const auto addInstance = [&scene](std::uint32_t materialIndex, float x,
+                                      float z) {
+        PhysicsSandboxRenderInstance instance;
+        instance.meshIndex = 0u;
+        instance.materialIndex = materialIndex;
+        instance.purpose = PhysicsSandboxScenePurpose::PlacedBlock;
+        instance.worldTransform.translation = {x, 0.0f, z};
+        scene.instances.push_back(std::move(instance));
+    };
+
+    addInstance(0u, 0.0f, 0.0f);
+    addInstance(0u, 127.0f, 0.0f);
+    addInstance(0u, 128.0f, 0.0f);
+    addInstance(0u, -2.0f, 0.0f);
+    addInstance(1u, 0.0f, 0.0f);
+    addInstance(2u, 130.0f, 260.0f);
+    addInstance(2u, 190.0f, 300.0f);
+    addInstance(3u, 0.0f, 130.0f);
+    addInstance(3u, 110.0f, 130.0f);
+    addInstance(4u, 256.0f, 260.0f);
+    addInstance(4u, 384.0f, 260.0f);
+    addInstance(5u, 0.0f, 260.0f);
+    addInstance(5u, 500.0f, 260.0f);
+
+    StaticVisualBatchOptions options;
+    options.materialStates = {
+            {StaticVisualAlphaMode::Opaque, false, true},
+            {StaticVisualAlphaMode::Masked, false},
+            {StaticVisualAlphaMode::Blended, true},
+            {StaticVisualAlphaMode::Additive, false},
+            {StaticVisualAlphaMode::Subtractive, false},
+            {StaticVisualAlphaMode::Unknown, false},
+    };
+
+    const auto result =
+            forevertas::viewer::BuildStaticVisualBatches(scene, options);
+    const auto repeat =
+            forevertas::viewer::BuildStaticVisualBatches(scene, options);
+    const auto legacy =
+            forevertas::viewer::BuildStaticVisualBatches(scene);
+
+    const auto findBatch = [&result](std::uint32_t sourceMaterialIndex,
+                                     bool spatiallyPartitioned,
+                                     std::int64_t cellX,
+                                     std::int64_t cellZ) {
+        return std::find_if(
+                result.batches.cbegin(), result.batches.cend(),
+                [=](const StaticVisualBatch &batch) {
+                    return batch.sourceMaterialIndex == sourceMaterialIndex &&
+                           batch.spatiallyPartitioned ==
+                                   spatiallyPartitioned &&
+                           batch.cellX == cellX && batch.cellZ == cellZ;
+                });
+    };
+
+    const auto opaqueCell = findBatch(0u, true, 0, 0);
+    const auto maskedCell = findBatch(1u, true, 0, 0);
+    const auto blendedCell = findBatch(2u, false, 0, 0);
+    const auto additiveCell = findBatch(3u, false, 0, 0);
+    const auto subtractiveCell = findBatch(4u, false, 0, 0);
+    const auto unknownBatch = findBatch(5u, false, 0, 0);
+
+    bool okay = Check(
+            result.batches.size() == 8u &&
+                    result.telemetry.acceptedSourceTriangleCount == 13u &&
+                    result.telemetry.submittedTriangleCount == 13u &&
+                    result.telemetry.submittedBatchCount == 8u &&
+                    result.telemetry.submittedMaterialCount == 6u &&
+                    result.telemetry.populatedSpatialCellCount == 3u &&
+                    result.telemetry.spatialBatchCount == 4u &&
+                    result.telemetry.unpartitionedBatchCount == 4u &&
+                    result.telemetry.spatiallyPartitionedInstanceCount == 5u &&
+                    result.telemetry.unknownAlphaInstanceCount == 2u,
+            "spatial batching telemetry did not describe submitted geometry");
+    okay &= Check(
+            opaqueCell != result.batches.cend() &&
+                    opaqueCell->alphaMode == StaticVisualAlphaMode::Opaque &&
+                    !opaqueCell->doubleSided &&
+                    opaqueCell->sourceInstanceCount == 2u &&
+                    opaqueCell->triangleCount == 2u &&
+                    maskedCell != result.batches.cend() &&
+                    maskedCell->alphaMode == StaticVisualAlphaMode::Masked &&
+                    maskedCell->sourceInstanceCount == 1u &&
+                    blendedCell != result.batches.cend() &&
+                    blendedCell->alphaMode ==
+                            StaticVisualAlphaMode::Blended &&
+                    blendedCell->doubleSided &&
+                    !blendedCell->spatiallyPartitioned &&
+                    blendedCell->sourceInstanceCount == 2u &&
+                    additiveCell != result.batches.cend() &&
+                    additiveCell->alphaMode == StaticVisualAlphaMode::Additive &&
+                    !additiveCell->spatiallyPartitioned &&
+                    additiveCell->sourceInstanceCount == 2u &&
+                    subtractiveCell != result.batches.cend() &&
+                    subtractiveCell->alphaMode ==
+                            StaticVisualAlphaMode::Subtractive &&
+                    !subtractiveCell->spatiallyPartitioned &&
+                    subtractiveCell->sourceInstanceCount == 2u &&
+                    unknownBatch != result.batches.cend() &&
+                    unknownBatch->alphaMode ==
+                            StaticVisualAlphaMode::Unknown &&
+                    !unknownBatch->spatiallyPartitioned &&
+                    unknownBatch->sourceInstanceCount == 2u,
+            "source material or render state collapsed across spatial batches");
+    if (opaqueCell != result.batches.cend()) {
+        constexpr std::size_t FloatCount = 17u;
+        const auto *vertices = reinterpret_cast<const float *>(
+                opaqueCell->vertices.constData());
+        const std::size_t vertexCount =
+                static_cast<std::size_t>(opaqueCell->vertices.size()) /
+                (FloatCount * sizeof(float));
+        bool exactWorldXz = vertexCount == 6u;
+        for (std::size_t index = 0u; index < vertexCount; ++index) {
+            const float *vertex = vertices + index * FloatCount;
+            exactWorldXz &=
+                    std::fabs(vertex[9] - vertex[0] / 16.0f) < 0.0001f &&
+                    std::fabs(vertex[10] - vertex[2] / 16.0f) < 0.0001f;
+        }
+        okay &= Check(exactWorldXz,
+                      "world-XZ material mapping was not world.xz / 16");
+    }
+    okay &= Check(
+            repeat.telemetry.acceptedSourceTriangleCount ==
+                            result.telemetry.acceptedSourceTriangleCount &&
+                    repeat.telemetry.submittedTriangleCount ==
+                            result.telemetry.submittedTriangleCount &&
+                    repeat.telemetry.submittedBatchCount ==
+                            result.telemetry.submittedBatchCount &&
+                    repeat.telemetry.submittedMaterialCount ==
+                            result.telemetry.submittedMaterialCount &&
+                    repeat.telemetry.populatedSpatialCellCount ==
+                            result.telemetry.populatedSpatialCellCount &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry
+                                    .materialClassificationNanoseconds &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry.geometryBuildNanoseconds &&
+                    result.telemetry.totalBuildNanoseconds >=
+                            result.telemetry.finalizationNanoseconds,
+            "pipeline counters were nondeterministic or stage timings invalid");
+    okay &= Check(
+            legacy.batches.size() == 6u &&
+                    legacy.telemetry.submittedMaterialCount == 6u &&
+                    legacy.telemetry.submittedTriangleCount == 13u &&
+                    legacy.telemetry.populatedSpatialCellCount == 0u &&
+                    legacy.telemetry.spatialBatchCount == 0u &&
+                    legacy.telemetry.unpartitionedBatchCount == 6u &&
+                    legacy.telemetry.unknownAlphaInstanceCount == 13u &&
+                    std::all_of(legacy.batches.cbegin(),
+                                legacy.batches.cend(),
+                                [](const StaticVisualBatch &batch) {
+                                    return !batch.spatiallyPartitioned &&
+                                           batch.alphaMode ==
+                                                   StaticVisualAlphaMode::
+                                                           Unknown;
+                                }),
+            "one-argument pipeline compatibility guessed material semantics");
+    return okay;
+}
+
+bool TestMirroredInstanceWinding() {
+    PhysicsSandboxRenderScene scene;
+    scene.meshes.push_back(TriangleMesh());
+    scene.materials.push_back(Named("Concrete"));
+    PhysicsSandboxRenderInstance instance;
+    instance.meshIndex = 0u;
+    instance.materialIndex = 0u;
+    instance.purpose = PhysicsSandboxScenePurpose::PlacedBlock;
+    instance.worldTransform.basisX = {-1.0f, 0.0f, 0.0f};
+    scene.instances.push_back(instance);
+
+    StaticVisualBatchOptions options;
+    options.materialStates = {
+            {StaticVisualAlphaMode::Opaque, false, false}};
+    const auto result =
+            forevertas::viewer::BuildStaticVisualBatches(scene, options);
+    if (!Check(result.batches.size() == 1u,
+               "mirrored instance did not produce one visual batch")) {
+        return false;
+    }
+    const StaticVisualBatch &batch = result.batches.front();
+    if (!Check(batch.indices.size() ==
+                       static_cast<qsizetype>(3u * sizeof(std::uint32_t)),
+               "mirrored instance produced an invalid index buffer")) {
+        return false;
+    }
+    std::array<std::uint32_t, 3> indices{};
+    std::memcpy(indices.data(), batch.indices.constData(), batch.indices.size());
+    return Check(indices == std::array<std::uint32_t, 3>{0u, 2u, 1u},
+                 "negative-determinant transform did not preserve front-face "
+                 "winding for back-face culling");
+}
+
 bool TestLargeEnvironmentGrassDoesNotTessellate() {
     constexpr float MinimumX = -20739.1f;
     constexpr float MaximumX = 23353.9f;
@@ -937,12 +1122,12 @@ bool TestLargeEnvironmentGrassDoesNotTessellate() {
             static_cast<qsizetype>(17u * sizeof(float));
     const auto *vertices = reinterpret_cast<const float *>(
             batch->vertices.constData());
-    const bool worldSpaceUvRepeats =
+    const bool authoredUvPreserved =
             batch->vertices.size() >= 3 * VertexStride &&
-            (std::fabs(vertices[17u + 9u]) > 1.0f ||
-             std::fabs(vertices[17u + 10u]) > 1.0f ||
-             std::fabs(vertices[34u + 9u]) > 1.0f ||
-             std::fabs(vertices[34u + 10u]) > 1.0f);
+            std::fabs(vertices[9u]) < 0.001f &&
+            std::fabs(vertices[10u]) < 0.001f &&
+            std::fabs(vertices[17u + 9u] - 1.0f) < 0.001f &&
+            std::fabs(vertices[34u + 10u] - 1.0f) < 0.001f;
     return Check(
             result.defaultVisibleInstanceCount == 1u &&
                     result.defaultTriangleCount == 1u &&
@@ -952,12 +1137,12 @@ bool TestLargeEnvironmentGrassDoesNotTessellate() {
                     batch->vertices.size() == 3 * VertexStride &&
                     batch->indices.size() ==
                             static_cast<qsizetype>(3u * sizeof(std::uint32_t)) &&
-                    worldSpaceUvRepeats &&
+                    authoredUvPreserved &&
                     repeated != repeat.batches.cend() &&
                     batch->vertices == repeated->vertices &&
                     batch->indices == repeated->indices,
-            "large environment scenery was subdivided into texture-tile "
-            "geometry instead of retaining one repeating-UV triangle");
+            "large environment scenery did not retain one authored-UV "
+            "triangle");
 }
 
 bool TestIndexedGeometry() {
@@ -1105,6 +1290,8 @@ int main(int argc, char **argv) {
     okay &= TestReplacementParametersAndTextures();
     okay &= TestClipPlanesAndPurposeFiltering();
     okay &= TestStaticBatching();
+    okay &= TestSpatialBatchingAndTelemetry();
+    okay &= TestMirroredInstanceWinding();
     okay &= TestLargeEnvironmentGrassDoesNotTessellate();
     okay &= TestIndexedGeometry();
     okay &= TestRayTracingShaders();

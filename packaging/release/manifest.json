@@ -12,7 +12,7 @@
     },
     "forevervalidator": {
       "repository": "https://github.com/jakubschenk/ForeverValidator.git",
-      "commit": "93bcee7244b8031596e4fe0f88fa75998cfa62d2",
+      "commit": "12fdc1bba0e04d0df3276906423cf7cf1b3f2301",
       "version": "0.2.2"
     }
   },
@@ -23,7 +23,30 @@
     "cmake_architectures": "61-real;62-real;70-real;72-real;75-real;80-real;86-real;87-real;89-real;90-real;100-real;101-real;120-real;120-virtual",
     "architecture_key": "sm61-sm62-sm70-sm72-sm75-sm80-sm86-sm87-sm89-sm90-sm100-sm101-sm120-ptx120",
     "split_compile_jobs": 4,
-    "search_object_source_commit": "93bcee7244b8031596e4fe0f88fa75998cfa62d2"
+    "search_object_source_commit": "93bcee7244b8031596e4fe0f88fa75998cfa62d2",
+    "search_object_output_neutral_paths": [
+      "CMakeLists.txt",
+      "README.md",
+      "docs/pr-material-texture-assets.md",
+      "include/forevervalidator/experimental/physics_sandbox.h",
+      "src/engine/game/material_render_definition.h",
+      "src/engine/game/material_texture_asset_source.h",
+      "src/format/assets/replay_asset_repository.h",
+      "src/format/materials/material_pack_repository.cpp",
+      "src/format/materials/material_pack_repository.h",
+      "src/format/materials/material_render_archive_decoder.cpp",
+      "src/format/materials/material_render_archive_decoder.h",
+      "src/format/pack/block_info_catalog/installed_pack_asset_repository.cpp",
+      "src/format/pack/block_info_catalog/installed_pack_asset_repository.h",
+      "src/platform/native/installed_pack_asset_source.cpp",
+      "src/platform/native/installed_pack_asset_source_internal.h",
+      "src/simulation/runtime/physics_sandbox_texture_assets.cpp",
+      "src/simulation/runtime/physics_sandbox_texture_assets.h",
+      "src/simulation/runtime/replay_simulation_session.cpp",
+      "src/validation/api/validation_api.cpp",
+      "tests/installed_pack_asset_source_tests.cpp",
+      "tests/render_scene_tests.cpp"
+    ]
   },
   "toolchains": {
     "linux": {
