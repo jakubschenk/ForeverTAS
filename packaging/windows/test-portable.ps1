@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Archive,
-    [string]$WorkingDirectory = ""
+    [string]$WorkingDirectory = "",
+    [switch]$RequireCuda
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +60,22 @@ try {
         $FullPath = Join-Path $ApplicationDirectory $RequiredPath
         if (-not (Test-Path $FullPath -PathType Leaf)) {
             throw "Missing deployed runtime file: $RequiredPath"
+        }
+    }
+    if ($RequireCuda) {
+        $CudaRuntimeFamilies = [ordered]@{
+            cudart = "cudart64_*.dll"
+            nvrtc = "nvrtc64_120_0.dll"
+            nvrtc_builtins = "nvrtc-builtins64_*.dll"
+            nvJitLink = "nvJitLink_*.dll"
+        }
+        foreach ($Family in $CudaRuntimeFamilies.GetEnumerator()) {
+            $RuntimeMatches = @(
+                Get-ChildItem $ApplicationDirectory -File -Filter $Family.Value
+            )
+            if ($RuntimeMatches.Count -ne 1) {
+                throw "Expected exactly one $($Family.Key) CUDA runtime DLL, found $($RuntimeMatches.Count)"
+            }
         }
     }
 
