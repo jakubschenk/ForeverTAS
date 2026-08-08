@@ -266,9 +266,13 @@ def write_lock(manifest_path: Path, manifest: dict, state: dict, output: Path) -
 
 def export_source(root: Path, commit: str, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(suffix=".tar") as archive:
-        run(["git", "-C", str(root), "archive", "--format=tar", "-o", archive.name, commit])
-        with tarfile.open(archive.name) as stream:
+    # NamedTemporaryFile remains exclusively open on Windows, so `git archive`
+    # cannot replace it. Give Git a path in a private temporary directory
+    # instead; the directory context still guarantees cleanup.
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / "source.tar"
+        run(["git", "-C", str(root), "archive", "--format=tar", "-o", str(archive), commit])
+        with tarfile.open(archive) as stream:
             stream.extractall(destination, filter="data")
 
 
