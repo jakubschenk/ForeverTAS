@@ -628,6 +628,39 @@ if(BUILD_TESTING)
         forevertas_gui
         Qt6::Gui)
 
+    add_executable(forevertas-renderer-capture
+        tests/renderer_capture.cpp)
+    qt_add_resources(forevertas-renderer-capture
+        "renderer-capture-materials"
+        PREFIX "/materials"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/materials"
+        FILES ${FOREVERTAS_REPLACEMENT_TEXTURES})
+    qt_add_resources(forevertas-renderer-capture
+        "renderer-capture-environment"
+        PREFIX "/environment"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/environment"
+        FILES ${FOREVERTAS_ENVIRONMENT_TEXTURES})
+    if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools)
+        qt_add_shaders(forevertas-renderer-capture
+            "renderer-capture-ray-tracing-shaders"
+            PREFIX "/raytracing"
+            GLSL "310 es,430"
+            FILES
+                shaders/raytrace.comp
+                shaders/raytrace_present.vert
+                shaders/raytrace_present.frag)
+    endif()
+    target_compile_definitions(forevertas-renderer-capture PRIVATE
+        FOREVERTAS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(forevertas-renderer-capture PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Quick3D
+        Qt6::QuickControls2
+        Qt6::Widgets)
+
     add_executable(forevertas-whiteboard-tests
         tests/whiteboard_tests.cpp)
     target_compile_definitions(forevertas-whiteboard-tests PRIVATE
@@ -645,6 +678,8 @@ if(BUILD_TESTING)
         target_compile_options(forevertas-controller-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-renderer-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-renderer-capture PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-whiteboard-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
