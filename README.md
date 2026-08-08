@@ -11,8 +11,10 @@ ForeverTAS -> PhysicsSandbox -> ForeverValidator physics
 
 ## Dependency
 
-CMake `FetchContent` pins ForeverValidator to the exact commit
-`688071fa82c3d93b3617ac1529a24915c0fe3364`. The embedded build disables the
+CMake `FetchContent` pins the companion
+[`jakubschenk/ForeverValidator`](https://github.com/jakubschenk/ForeverValidator)
+texture-assets branch to the exact commit
+`1eba97d92824427708018b7dd6a39dff07a7516b`. The embedded build disables the
 ForeverValidator CLI and tests and links its native asset adapter and core
 simulation library.
 
@@ -182,11 +184,12 @@ through the full replay and added to the viewer as an amber trajectory. The
 newest path is emphasized while older improvement paths remain visible at
 reduced opacity.
 
-The default viewport is the textured Qt Quick 3D renderer. On Qt 6.7 or newer
-with ShaderTools, the `Textured (RT)` render mode enables the real-time QRhi
-compute renderer with GPU BVH traversal, ray-traced shadows and reflections,
-and immediate noise-free output. Qt 6.5 and 6.6 keep the full raster renderer
-and omit only that optional mode.
+The viewport is a textured Qt Quick 3D raster renderer. It resolves the game
+textures already installed below the selected Packs directory, caches
+Qt-compatible copies locally, and defaults to authored/baked lighting so the
+map is not relit a second time. Dynamic lighting and shadows remain optional
+graphics settings. The experimental compute ray tracer is not part of the app
+build or render-mode menu.
 
 The viewer's **Whiteboard** mode draws directly over either renderer without
 replacing the map, cars, targets, or trajectories. Pen strokes, lines,
