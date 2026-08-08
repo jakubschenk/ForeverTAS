@@ -15,6 +15,7 @@
 #include <QString>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QVector2D>
 #include <QVector3D>
 
@@ -97,6 +98,7 @@ struct RaceViewerLoadResult {
     std::shared_ptr<const RayTracingSceneData> rayTracingScene;
     QVariantList visualMaterials;
     QVariantList visualBatchItems;
+    QVariantMap renderTelemetry;
     QVector3D visualBoundsMin{};
     QVector3D visualBoundsMax{};
     QVariantList carEllipsoids;
@@ -218,7 +220,9 @@ class RaceViewerController final : public QObject {
     Q_PROPERTY(qint64 shadowCount READ shadowCount NOTIFY sceneChanged)
     Q_PROPERTY(qint64 materialCount READ materialCount NOTIFY sceneChanged)
     Q_PROPERTY(qint64 diagnosticCount READ diagnosticCount NOTIFY
-                       sceneChanged)
+                        sceneChanged)
+    Q_PROPERTY(QVariantMap rendererTelemetry READ rendererTelemetry NOTIFY
+                        sceneChanged)
     Q_PROPERTY(qint64 ellipsoidCount READ ellipsoidCount NOTIFY sceneChanged)
     Q_PROPERTY(double sceneRadius READ sceneRadius NOTIFY sceneChanged)
     Q_PROPERTY(QVector3D sceneBoundsMin READ sceneBoundsMin NOTIFY sceneChanged)
@@ -293,6 +297,7 @@ public:
     qint64 shadowCount() const;
     qint64 materialCount() const;
     qint64 diagnosticCount() const;
+    QVariantMap rendererTelemetry() const;
     qint64 ellipsoidCount() const;
     double sceneRadius() const;
     QVector3D sceneBoundsMin() const;
@@ -483,6 +488,7 @@ private:
     QVariantList carEllipsoids_;
     QVariantList visualBatches_;
     QVariantList visualMaterials_;
+    QVariantMap renderTelemetry_;
     QVariantList trajectoryPaths_;
     RaceGeometry inputPreviewGeometry_;
     RaceGeometry bestTrajectoryGeometry_;

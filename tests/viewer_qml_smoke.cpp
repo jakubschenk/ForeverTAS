@@ -1,6 +1,7 @@
 #include "app/input_preview_binding.h"
 #include "app/search_controller.h"
 #include "app/system_file_dialog.h"
+#include "viewer/graphics_settings.h"
 #include "viewer/race_timeline_item.h"
 #include "viewer/race_viewer_controller.h"
 
@@ -126,10 +127,23 @@ bool VisualMaterialsAreBoundAndShared(
 
     QSet<QObject *> baseTextureObjects(baseTextures.cbegin(),
                                        baseTextures.cend());
-    for (const QObject *texture : baseTextures) {
+    for (qsizetype index = 0; index < baseTextures.size(); ++index) {
+        const QObject *const texture = baseTextures.at(index);
         const QUrl source = texture->property("source").toUrl();
-        if (source.scheme() != QStringLiteral("qrc") ||
-            !source.path().startsWith(QStringLiteral("/materials/")) ||
+        const QVariantMap definition =
+                viewer.visualMaterials().at(index).toMap();
+        const bool native =
+                definition.value(QStringLiteral("nativeAlbedo")).toBool();
+        const bool sourceValid = native
+                ? source.isLocalFile() && QFileInfo(source.toLocalFile()).isFile()
+                : source.scheme() == QStringLiteral("qrc") &&
+                        source.path().startsWith(
+                                QStringLiteral("/materials/"));
+        if (!sourceValid ||
+            texture->property("generateMipmaps").toBool() !=
+                    definition.value(
+                                      QStringLiteral("albedoGenerateMipmaps"))
+                            .toBool() ||
             !qFuzzyCompare(texture->property("scaleU").toFloat(), 1.0f) ||
             !qFuzzyCompare(texture->property("scaleV").toFloat(), 1.0f)) {
             return false;
@@ -149,18 +163,43 @@ bool VisualMaterialsAreBoundAndShared(
                 material->property("emissiveMap").value<QObject *>();
         const bool emissive =
                 definition.value(QStringLiteral("emissiveStrength"))
-                                .toFloat() > 0.0f;
+                                .toFloat() > 0.0f ||
+                definition.value(QStringLiteral("unlit")).toBool() ||
+                definition.value(QStringLiteral("alphaMode")).toString() ==
+                        QStringLiteral("additive");
         const QMetaProperty cullModeProperty =
                 material->metaObject()->property(
                         material->metaObject()->indexOfProperty("cullMode"));
         const char *const cullModeName =
                 cullModeProperty.enumerator().valueToKey(
                         material->property("cullMode").toInt());
+        const QByteArray expectedCull =
+                definition.value(QStringLiteral("doubleSided")).toBool()
+                ? QByteArrayLiteral("NoCulling")
+                : QByteArrayLiteral("BackFaceCulling");
+        const QMetaProperty blendModeProperty =
+                material->metaObject()->property(
+                        material->metaObject()->indexOfProperty("blendMode"));
+        const char *const blendModeName =
+                blendModeProperty.enumerator().valueToKey(
+                        material->property("blendMode").toInt());
+        const QString alphaMode =
+                definition.value(QStringLiteral("alphaMode")).toString();
+        const QByteArray expectedBlend =
+                alphaMode == QStringLiteral("additive")
+                ? QByteArrayLiteral("Screen")
+                : (alphaMode == QStringLiteral("subtractive")
+                           ? QByteArrayLiteral("Multiply")
+                           : QByteArrayLiteral("SourceOver"));
         if (!baseTextureObjects.contains(baseMap) || normalMap != nullptr ||
             (emissive ? emissiveMap != baseMap : emissiveMap != nullptr) ||
-            !qFuzzyCompare(material->property("opacity").toFloat(), 1.0f) ||
+            !qFuzzyCompare(material->property("opacity").toFloat(),
+                           definition.value(QStringLiteral("opacity"))
+                                   .toFloat()) ||
             cullModeName == nullptr ||
-            QByteArray(cullModeName) != "NoCulling" ||
+            QByteArray(cullModeName) != expectedCull ||
+            blendModeName == nullptr ||
+            QByteArray(blendModeName) != expectedBlend ||
             material->property("vertexColorsEnabled").toBool() !=
                     definition.value(QStringLiteral("vertexColors"))
                             .toBool()) {
@@ -182,6 +221,53 @@ bool VisualMaterialsAreBoundAndShared(
         usedMaterials.insert(material);
     }
     return repeatedBinding && usedMaterials.size() < models.size();
+}
+
+bool VisualNativeMapsMatchLighting(
+        const QList<QObject *> &materials,
+        const forevertas::viewer::RaceViewerController &viewer,
+        bool authoredLighting) {
+    if (materials.size() != viewer.visualMaterials().size()) return false;
+    const QVariantList definitions = viewer.visualMaterials();
+    for (qsizetype index = 0; index < materials.size(); ++index) {
+        const QObject *const material = materials.at(index);
+        const QVariantMap definition = definitions.at(index).toMap();
+        QObject *const normalMap =
+                material->property("normalMap").value<QObject *>();
+        QObject *const specularMap =
+                material->property("specularMap").value<QObject *>();
+        const bool expectNormal = !authoredLighting &&
+                definition.value(QStringLiteral("nativeNormal")).toBool();
+        const bool expectSpecular = !authoredLighting &&
+                definition.value(QStringLiteral("nativeSpecular")).toBool();
+        if ((normalMap != nullptr) != expectNormal ||
+            (specularMap != nullptr) != expectSpecular) {
+            return false;
+        }
+        if ((normalMap != nullptr &&
+             !normalMap->property("source").toUrl().isLocalFile()) ||
+            (specularMap != nullptr &&
+             !specularMap->property("source").toUrl().isLocalFile())) {
+            return false;
+        }
+
+        const QMetaProperty lightingProperty =
+                material->metaObject()->property(
+                        material->metaObject()->indexOfProperty("lighting"));
+        const char *const lightingName =
+                lightingProperty.enumerator().valueToKey(
+                        material->property("lighting").toInt());
+        const QByteArray expectedLighting =
+                authoredLighting ||
+                        definition.value(QStringLiteral("unlit")).toBool()
+                ? QByteArrayLiteral("NoLighting")
+                : QByteArrayLiteral("FragmentLighting");
+        if (lightingName == nullptr ||
+            QByteArray(lightingName) != expectedLighting) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool FilledModelsHaveBakedRunPalettes(
@@ -328,10 +414,15 @@ bool InvokeSliderValueCommit(
 }  // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        std::cerr << "usage: forevertas-viewer-qml-smoke <Packs> <replay>\n";
+    if (argc != 3 && argc != 4) {
+        std::cerr << "usage: forevertas-viewer-qml-smoke <Packs> <replay> "
+                     "[--renderer-only]\n";
         return 2;
     }
+    const bool rendererOnly =
+            argc == 4 && QString::fromLocal8Bit(argv[3]) ==
+                    QStringLiteral("--renderer-only");
+    if (argc == 4 && !rendererOnly) return 2;
 
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     QApplication application(argc, argv);
@@ -343,6 +434,7 @@ int main(int argc, char **argv) {
 
     forevertas::app::SearchController controller;
     forevertas::viewer::RaceViewerController viewer;
+    forevertas::viewer::GraphicsSettings graphicsSettings;
     forevertas::app::BindInputPreview(controller, viewer);
 #if defined(Q_OS_LINUX)
     const bool nativeBrowseDialogsValid =
@@ -369,7 +461,9 @@ int main(int argc, char **argv) {
             {QStringLiteral("controller"),
              QVariant::fromValue(static_cast<QObject *>(&controller))},
             {QStringLiteral("viewer"),
-             QVariant::fromValue(static_cast<QObject *>(&viewer))}});
+             QVariant::fromValue(static_cast<QObject *>(&viewer))},
+            {QStringLiteral("graphicsSettings"),
+             QVariant::fromValue(static_cast<QObject *>(&graphicsSettings))}});
 
     int exitCode = 1;
     bool completed = false;
@@ -5456,38 +5550,13 @@ int main(int argc, char **argv) {
                                         !wireGeometry.isNull();
                                 const int initialVisibleVisualModels =
                                         VisibleModelCount(visualModels);
-                                const bool rayTracingSupported =
-                                        gpuRayTracingView != nullptr &&
-                                        gpuRayTracingView
-                                                ->property("supported")
-                                                .toBool();
-                                const int wireframeIndex =
-                                        rayTracingSupported ? 4 : 3;
-                                const int highContrastIndex =
-                                        rayTracingSupported ? 5 : 4;
+                                const int wireframeIndex = 3;
+                                const int highContrastIndex = 4;
                                 bool renderModeOptionsValid =
                                         renderModeSelector != nullptr &&
                                         renderModeSelector->property("count")
-                                                        .toInt() ==
-                                                (rayTracingSupported ? 6 : 5);
+                                                        .toInt() == 5;
                                 if (renderModeOptionsValid) {
-                                    if (rayTracingSupported) {
-                                        renderModeSelector->setProperty(
-                                                "currentIndex", 1);
-                                        renderModeOptionsValid =
-                                                renderModeSelector
-                                                                ->property(
-                                                                        "currentValue")
-                                                                .toString() ==
-                                                        QStringLiteral(
-                                                                "textured-rt") &&
-                                                renderModeSelector
-                                                                ->property(
-                                                                        "displayText")
-                                                                .toString() ==
-                                                        QStringLiteral(
-                                                                "Textured (RT)");
-                                    }
                                     renderModeSelector->setProperty(
                                             "currentIndex", wireframeIndex);
                                     renderModeOptionsValid &=
@@ -5540,6 +5609,9 @@ int main(int argc, char **argv) {
                                                 visualMaterials,
                                                 visualBaseTextures,
                                                 viewer) &&
+                                        VisualNativeMapsMatchLighting(
+                                                visualMaterials, viewer,
+                                                true) &&
                                         root->findChildren<QObject *>(
                                                     QStringLiteral(
                                                             "trackVisualNormalTexture"))
@@ -5564,62 +5636,60 @@ int main(int argc, char **argv) {
                                                 static_cast<int>(
                                                         viewer.ellipsoidCount()),
                                                 false);
-                                bool rayTracingModeValid =
-                                        gpuRayTracingView != nullptr &&
+                                graphicsSettings.setLightingMode(
+                                        QStringLiteral("lit"));
+                                QCoreApplication::processEvents();
+                                const bool litNativeMapsValid =
+                                        VisualNativeMapsMatchLighting(
+                                                visualMaterials, viewer,
+                                                false) &&
+                                        mainMapLight != nullptr &&
+                                        fillMapLight != nullptr &&
+                                        mainMapLight->property("visible")
+                                                .toBool() &&
+                                        fillMapLight->property("visible")
+                                                .toBool();
+                                graphicsSettings.setWorldShadows(true);
+                                QCoreApplication::processEvents();
+                                const bool shadowSettingValid =
+                                        mainMapLight != nullptr &&
+                                        mainMapLight->property("castsShadow")
+                                                .toBool() &&
+                                        std::any_of(
+                                                visualModels.cbegin(),
+                                                visualModels.cend(),
+                                                [](const QObject *model) {
+                                                    return model->property(
+                                                                        "casts"
+                                                                        "Shado"
+                                                                        "ws")
+                                                            .toBool();
+                                                });
+                                graphicsSettings.setWorldShadows(false);
+                                graphicsSettings.setLightingMode(
+                                        QStringLiteral("authored"));
+                                QCoreApplication::processEvents();
+                                const bool graphicsSettingsModesValid =
+                                        litNativeMapsValid &&
+                                        shadowSettingValid &&
+                                        VisualNativeMapsMatchLighting(
+                                                visualMaterials, viewer,
+                                                true) &&
+                                        !mainMapLight->property("visible")
+                                                 .toBool() &&
+                                        !fillMapLight->property("visible")
+                                                 .toBool();
+                                const bool rasterOnlyModeValid =
+                                        gpuRayTracingView == nullptr &&
                                         rasterMapView != nullptr &&
                                         rayTracingTrajectoryOverlay != nullptr &&
-                                        !gpuRayTracingView
+                                        !root->property("rayTracingEnabled")
+                                                 .toBool() &&
+                                        !rayTracingTrajectoryOverlay
                                                  ->property("visible")
                                                  .toBool() &&
-                                        !gpuRayTracingView
-                                                 ->property("active")
-                                                 .toBool() &&
-                                        !gpuRayTracingView
-                                                 ->property("status")
-                                                 .toString()
-                                                 .isEmpty();
-                                if (rayTracingSupported) {
-                                    root->setProperty(
-                                            "renderMode",
-                                            QStringLiteral("textured-rt"));
-                                    QCoreApplication::processEvents();
-                                    rayTracingModeValid &=
-                                            root->property(
-                                                        "rayTracingEnabled")
-                                                            .toBool() &&
-                                            gpuRayTracingView
-                                                    ->property("visible")
-                                                    .toBool() &&
-                                            gpuRayTracingView
-                                                    ->property("active")
-                                                    .toBool() &&
-                                            rayTracingTrajectoryOverlay
-                                                    ->property("visible")
-                                                    .toBool() &&
-                                            !rasterMapView
-                                                     ->property("visible")
-                                                     .toBool();
-                                    root->setProperty(
-                                            "renderMode",
-                                            QStringLiteral("textured"));
-                                    QCoreApplication::processEvents();
-                                    rayTracingModeValid &=
-                                            !root->property(
-                                                         "rayTracingEnabled")
-                                                     .toBool() &&
-                                            !gpuRayTracingView
-                                                     ->property("visible")
-                                                     .toBool() &&
-                                            !gpuRayTracingView
-                                                     ->property("active")
-                                                     .toBool() &&
-                                            !rayTracingTrajectoryOverlay
-                                                     ->property("visible")
-                                                     .toBool() &&
-                                            rasterMapView
-                                                    ->property("visible")
-                                                    .toBool();
-                                }
+                                        rasterMapView->property("visible")
+                                                .toBool();
                                 const bool optimizedRenderState =
                                         viewCamera != nullptr &&
                                         viewCamera->property("clipNear")
@@ -5649,41 +5719,73 @@ int main(int argc, char **argv) {
                                                                          "ws")
                                                                     .toBool();
                                                 });
-                                const QUrl skySource =
-                                        daySkyTexture != nullptr
-                                        ? daySkyTexture->property("source")
-                                                  .toUrl()
-                                        : QUrl();
                                 const bool daylightEnvironment =
                                         mapEnvironment != nullptr &&
-                                        daySkyTexture != nullptr &&
+                                        daySkyTexture == nullptr &&
                                         mainMapLight != nullptr &&
                                         fillMapLight != nullptr &&
-                                        mapEnvironment
-                                                        ->property(
-                                                                "probeExposure")
-                                                        .toDouble() >=
-                                                0.8 &&
-                                        mapEnvironment
-                                                        ->property(
-                                                                "skyboxBlur"
-                                                                "Amount")
-                                                        .toDouble() ==
-                                                0.0 &&
-                                        skySource.scheme() ==
-                                                QStringLiteral("qrc") &&
-                                        skySource.path() ==
-                                                QStringLiteral(
-                                                        "/environment/"
-                                                        "day_sky.png") &&
-                                        mainMapLight
-                                                        ->property("brightness")
-                                                        .toDouble() >=
-                                                1.0 &&
-                                        fillMapLight
-                                                        ->property("brightness")
-                                                        .toDouble() >
-                                                0.0;
+                                        !mainMapLight->property("visible")
+                                                 .toBool() &&
+                                        !fillMapLight->property("visible")
+                                                 .toBool() &&
+                                        !mainMapLight
+                                                 ->property("castsShadow")
+                                                 .toBool() &&
+                                        !fillMapLight
+                                                 ->property("castsShadow")
+                                                 .toBool();
+
+                                if (rendererOnly) {
+                                    const QVariantMap renderer =
+                                            viewer.rendererTelemetry();
+                                    const bool nativeTextureState =
+                                            renderer.value(QStringLiteral(
+                                                                   "resolvedTextures"))
+                                                            .toLongLong() > 0 &&
+                                            renderer.value(QStringLiteral(
+                                                                   "nativeMaterials"))
+                                                            .toLongLong() > 0 &&
+                                            renderer.value(QStringLiteral(
+                                                                   "estimatedTextureMiB"))
+                                                            .toDouble() > 0.0 &&
+                                            renderer.value(QStringLiteral(
+                                                                   "submittedBatches"))
+                                                            .toLongLong() ==
+                                                    visualModels.size() &&
+                                            renderer.value(QStringLiteral(
+                                                                   "spatialCells"))
+                                                            .toLongLong() > 0;
+                                    completed = true;
+                                    exitCode = geometryAttached &&
+                                                    initialModelState &&
+                                                    graphicsSettingsModesValid &&
+                                                    rasterOnlyModeValid &&
+                                                    optimizedRenderState &&
+                                                    daylightEnvironment &&
+                                                    nativeTextureState
+                                            ? 0
+                                            : 1;
+                                    if (exitCode != 0) {
+                                        std::cerr
+                                                << "native renderer QML smoke "
+                                                   "failed: geometry="
+                                                << geometryAttached
+                                                << ", initial="
+                                                << initialModelState
+                                                << ", graphics="
+                                                << graphicsSettingsModesValid
+                                                << ", raster="
+                                                << rasterOnlyModeValid
+                                                << ", optimized="
+                                                << optimizedRenderState
+                                                << ", environment="
+                                                << daylightEnvironment
+                                                << ", native="
+                                                << nativeTextureState << '\n';
+                                    }
+                                    application.quit();
+                                    return;
+                                }
 
                                 const bool bestSelectedInitially =
                                         viewer.runCount() == 2 &&
@@ -7198,8 +7300,9 @@ int main(int argc, char **argv) {
                                 completed = true;
                                 exitCode =
                                         geometryAttached && rootsVisible &&
-                                                        carDelegatesStable &&
-                                                        initialModelState &&
+                                                         carDelegatesStable &&
+                                                         initialModelState &&
+                                                         graphicsSettingsModesValid &&
                                                         bestSelectedInitially &&
                                                         onlyBestSelected &&
                                                         neutralModeState &&
@@ -7207,7 +7310,7 @@ int main(int argc, char **argv) {
                                                         materialDebugState &&
                                                         wireframeState &&
                                                         restoredState &&
-                                                        rayTracingModeValid &&
+                                                        rasterOnlyModeValid &&
                                                         optimizedRenderState &&
                                                         daylightEnvironment &&
                                                         loadedSceneThemeInvariant &&
@@ -7404,9 +7507,11 @@ int main(int argc, char **argv) {
                                             << "/message="
                                             << whiteboard->operationMessage()
                                                        .toStdString()
-                                            << ", optimizedRenderState="
-                                            << optimizedRenderState
-                                            << ", daylightEnvironment="
+                                             << ", optimizedRenderState="
+                                             << optimizedRenderState
+                                             << ", graphicsSettingsModes="
+                                             << graphicsSettingsModesValid
+                                             << ", daylightEnvironment="
                                             << daylightEnvironment
                                             << ", themeSceneInvariant="
                                             << loadedSceneThemeInvariant
