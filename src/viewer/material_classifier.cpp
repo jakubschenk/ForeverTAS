@@ -136,8 +136,47 @@ ReplacementMaterialClass ClassifySemanticContext(
     if (material.water || surface == 13u) {
         return ReplacementMaterialClass::Water;
     }
-    if (surface == 0u && context.grassGroundCover) {
+    if (context.grassGroundCover &&
+        IsSurface(surface, {0u, 2u, 20u, 25u})) {
         return ReplacementMaterialClass::Grass;
+    }
+    // Some Stadium environment grass materials carry a PreLightGen helper
+    // sampler. The generic text fallback must not interpret that sampler as
+    // evidence that the grass itself emits light. Restrict this precedence to
+    // authored grass identities on collision surfaces that already fall back
+    // to the Grass class.
+    if (IsSurface(surface, {2u, 20u, 25u})) {
+        const bool hasPreLightHelper = std::any_of(
+                material.bitmaps.cbegin(), material.bitmaps.cend(),
+                [](const auto &bitmap) {
+                    return Lower(bitmap.samplerName) == "prelightgen";
+                });
+        if (hasPreLightHelper) {
+            std::string authoredIdentity =
+                    material.sourcePath + " " +
+                    material.materialPlainPath + " " + material.modelPath +
+                    " " + material.modelPlainPath + " " +
+                    material.shaderPath + " " + material.shaderPlainPath;
+            for (const auto &bitmap : material.bitmaps) {
+                authoredIdentity += " " + bitmap.samplerName + " " +
+                        bitmap.sourcePath;
+            }
+            authoredIdentity = Normalize(std::move(authoredIdentity));
+            constexpr const char *PreLightQualifier = "prelightgen";
+            for (std::size_t offset =
+                         authoredIdentity.find(PreLightQualifier);
+                 offset != std::string::npos;
+                 offset = authoredIdentity.find(PreLightQualifier, offset)) {
+                authoredIdentity.replace(
+                        offset,
+                        std::char_traits<char>::length(PreLightQualifier),
+                        " ");
+            }
+            if (ClassifyText(authoredIdentity) ==
+                ReplacementMaterialClass::Grass) {
+                return ReplacementMaterialClass::Grass;
+            }
+        }
     }
     if (ContainsAny(block, {"startline", "finishline", "multilap"})) {
         if (surface == 28u) {

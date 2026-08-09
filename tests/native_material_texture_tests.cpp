@@ -282,13 +282,18 @@ bool TestResolveNativeMaterialProfile() {
     PhysicsSandboxMaterialBitmap gdiffuse;
     gdiffuse.samplerName = "gdiffuse";
     gdiffuse.textureAssetId = 17u;
-    material.bitmaps = {basecolor, diffuse, gdiffuse};
+    PhysicsSandboxMaterialBitmap occlusion;
+    occlusion.samplerName = "Occlusion";
+    occlusion.textureAssetId = 23u;
+    material.bitmaps = {basecolor, diffuse, gdiffuse, occlusion};
     material.shaderPath = "LEVEL/TECHNO/MEDIA/MATERIAL/PDIFF pdiff pa px2";
     const NativeMaterialProfile selected =
             ResolveNativeMaterialProfile(material);
     bool okay = Check(selected.albedoBitmap == 1,
                       "albedo sampler selection did not honor diffuse-first "
                       "priority");
+    okay &= Check(selected.occlusionBitmap == -1,
+                  "generic occlusion sampler bypassed the narrow TOcc gate");
     okay &= Check(selected.renderState.worldXz,
                    "world-XZ rule was not applied for exact matching");
     okay &= Check(selected.albedoAlphaUsage ==
@@ -317,6 +322,49 @@ bool TestResolveNativeMaterialProfile() {
     okay &= Check(realGrass.renderState.worldXz,
                   "plain archived grass model identity did not enable "
                   "world-XZ mapping");
+    archivedGrass.materialPlainPath =
+            "Stadium\\Media\\Material\\StadiumGrassOcc.Material.Gbx";
+    const NativeMaterialProfile grassOcclusion =
+            ResolveNativeMaterialProfile(archivedGrass);
+    okay &= Check(grassOcclusion.occlusionBitmap == 3 &&
+                          grassOcclusion.occlusionUvSet == 1,
+                  "exact StadiumGrassOcc TOcc identity did not select baked "
+                  "AO on UV1");
+    PhysicsSandboxRenderMaterial stadiumWarp = archivedGrass;
+    stadiumWarp.materialPlainPath =
+            "Stadium\\Media\\Material\\StadiumWarpGrassPreLightGen."
+            "Material.Gbx";
+    const NativeMaterialProfile rejectedWarpOcclusion =
+            ResolveNativeMaterialProfile(stadiumWarp);
+    okay &= Check(rejectedWarpOcclusion.occlusionBitmap == -1 &&
+                          rejectedWarpOcclusion.occlusionUvSet == 0,
+                  "environment grass bypassed the block-ground AO gate");
+
+    PhysicsSandboxRenderMaterial archivedDirt = material;
+    archivedDirt.materialPlainPath =
+            "Stadium\\Media\\Material\\StadiumDirt.Material.Gbx";
+    archivedDirt.modelPlainPath =
+            "Techno2\\Media\\Material\\SoilGen21.Material.Gbx";
+    archivedDirt.modelSelectedPath =
+            "Techno2\\Media\\Material\\0123456789ABCDEF0123456789ABCDEF";
+    archivedDirt.modelPath = archivedDirt.modelSelectedPath;
+    archivedDirt.shaderPlainPath =
+            "Techno2\\Media\\Shader\\SoilGen21 PC3.Shader.Gbx";
+    archivedDirt.shaderSelectedPath =
+            "Techno2\\Media\\Shader\\FEDCBA9876543210FEDCBA9876543210";
+    archivedDirt.shaderPath = archivedDirt.shaderSelectedPath;
+    const NativeMaterialProfile realDirt =
+            ResolveNativeMaterialProfile(archivedDirt);
+    okay &= Check(realDirt.renderState.worldXz,
+                  "plain archived SoilGen21 model identity did not enable "
+                  "world-XZ mapping");
+    PhysicsSandboxRenderMaterial dirtTransition = archivedDirt;
+    dirtTransition.modelPlainPath =
+            "Techno2\\Media\\Material\\SoilFixToGen21.Material.Gbx";
+    okay &= Check(!ResolveNativeMaterialProfile(dirtTransition)
+                           .renderState.worldXz,
+                  "SoilGen21 plain-path recovery matched a dirt transition "
+                  "material");
 
     PhysicsSandboxRenderMaterial grassFadeHelper;
     grassFadeHelper.materialPlainPath =

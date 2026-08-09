@@ -31,6 +31,7 @@ using forevertas::viewer::StaticVisualAlphaMode;
 using forevertas::viewer::StaticVisualBatch;
 using forevertas::viewer::StaticVisualBatchOptions;
 using forevertas::viewer::StaticVisualMaterialState;
+using forevervalidator::experimental::PhysicsSandboxMaterialBitmap;
 using forevervalidator::experimental::PhysicsSandboxRenderInstance;
 using forevervalidator::experimental::PhysicsSandboxRenderLayer;
 using forevervalidator::experimental::PhysicsSandboxRenderMaterial;
@@ -169,6 +170,59 @@ bool TestClassification() {
     okay &= Check(ClassifyMaterial(groundCover, groundCoverContext) ==
                           ReplacementMaterialClass::Grass,
                   "flat block ground cover did not classify as grass");
+    PhysicsSandboxRenderMaterial prelitGrassCover =
+            Named("StadiumGrassOcc");
+    prelitGrassCover.surfaceMaterialId = 2u;
+    PhysicsSandboxMaterialBitmap preLightSampler;
+    preLightSampler.samplerName = "PreLightGen";
+    prelitGrassCover.bitmaps.push_back(std::move(preLightSampler));
+    MaterialSemanticContext prelitGrassCoverContext;
+    prelitGrassCoverContext.blockName = "StadiumRoadMainStartLine";
+    prelitGrassCoverContext.grassGroundCover = true;
+    okay &= Check(ClassifyMaterial(prelitGrassCover,
+                                  prelitGrassCoverContext) ==
+                          ReplacementMaterialClass::Grass,
+                  "PreLightGen helper mislabeled block grass as emissive");
+    PhysicsSandboxRenderMaterial prelitEnvironmentGrass =
+            Named("Stadium/Media/Material/8275C2E8FF5B043DDBD1A8CCBEDC4F2D49");
+    prelitEnvironmentGrass.surfaceMaterialId = 2u;
+    prelitEnvironmentGrass.materialPlainPath =
+            "Stadium/Media/Material/"
+            "StadiumWarpGrassPreLightGen.Material.Gbx";
+    prelitEnvironmentGrass.modelPlainPath =
+            "Techno2/Media/Material/PDiff PDiff PA TOcc PX2 Grass."
+            "Material.Gbx";
+    PhysicsSandboxMaterialBitmap environmentPreLightSampler;
+    environmentPreLightSampler.samplerName = "PreLightGen";
+    prelitEnvironmentGrass.bitmaps.push_back(
+            std::move(environmentPreLightSampler));
+    MaterialSemanticContext environmentGrassContext;
+    environmentGrassContext.purpose = PhysicsSandboxScenePurpose::Environment;
+    okay &= Check(ClassifyMaterial(prelitEnvironmentGrass,
+                                  environmentGrassContext) ==
+                          ReplacementMaterialClass::Grass,
+                  "PreLightGen helper mislabeled Stadium environment grass "
+                  "as emissive");
+    PhysicsSandboxRenderMaterial glowingGrass = Named("GrassNeon");
+    glowingGrass.surfaceMaterialId = 2u;
+    PhysicsSandboxMaterialBitmap glowingGrassPreLightSampler;
+    glowingGrassPreLightSampler.samplerName = "PreLightGen";
+    glowingGrass.bitmaps.push_back(std::move(glowingGrassPreLightSampler));
+    okay &= Check(ClassifyMaterial(glowingGrass) ==
+                          ReplacementMaterialClass::Emissive,
+                  "PreLightGen helper suppressed genuine emissive evidence");
+    PhysicsSandboxRenderMaterial grassWithEmissiveMap = Named("Grass");
+    grassWithEmissiveMap.surfaceMaterialId = 2u;
+    PhysicsSandboxMaterialBitmap mappedGrassPreLightSampler;
+    mappedGrassPreLightSampler.samplerName = "PreLightGen";
+    grassWithEmissiveMap.bitmaps.push_back(
+            std::move(mappedGrassPreLightSampler));
+    PhysicsSandboxMaterialBitmap emissiveGrassSampler;
+    emissiveGrassSampler.samplerName = "Emissive";
+    grassWithEmissiveMap.bitmaps.push_back(std::move(emissiveGrassSampler));
+    okay &= Check(ClassifyMaterial(grassWithEmissiveMap) ==
+                          ReplacementMaterialClass::Emissive,
+                  "PreLightGen helper suppressed a separate emissive map");
     okay &= Check(contextual(13u, "StadiumPool") ==
                           ReplacementMaterialClass::Water,
                   "pool provenance did not classify water");
@@ -178,6 +232,12 @@ bool TestClassification() {
     okay &= Check(contextual(22u, "StadiumRoadMainStartLine") ==
                           ReplacementMaterialClass::Emissive,
                   "start-line light did not classify as emissive");
+    okay &= Check(contextual(22u, "StadiumRoadMainCheckpoint") ==
+                          ReplacementMaterialClass::Emissive,
+                  "checkpoint light did not classify as emissive");
+    okay &= Check(contextual(22u, "StadiumRoadMainTurbo") ==
+                          ReplacementMaterialClass::Emissive,
+                  "turbo light did not classify as emissive");
     return okay;
 }
 

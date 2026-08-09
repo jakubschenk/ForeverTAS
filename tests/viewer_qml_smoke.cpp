@@ -222,6 +222,11 @@ bool VisualMaterialsAreBoundAndShared(
                            : QByteArrayLiteral("SourceOver"));
         if (!baseTextureObjects.contains(baseMap) || normalMap != nullptr ||
             (emissive ? emissiveMap != baseMap : emissiveMap != nullptr) ||
+            !qFuzzyCompare(material->property("roughness").toFloat(),
+                           definition.value(QStringLiteral("roughness"))
+                                   .toFloat()) ||
+            !qFuzzyIsNull(material->property("metalness").toFloat()) ||
+            !qFuzzyIsNull(material->property("specularAmount").toFloat()) ||
             !qFuzzyCompare(material->property("opacity").toFloat(),
                            definition.value(QStringLiteral("opacity"))
                                    .toFloat()) ||
@@ -252,6 +257,75 @@ bool VisualMaterialsAreBoundAndShared(
     return repeatedBinding && usedMaterials.size() < models.size();
 }
 
+bool VisualMaterialScalarsMatchDefinitions(
+        const QList<QObject *> &materials,
+        const forevertas::viewer::RaceViewerController &viewer) {
+    if (materials.size() != viewer.visualMaterials().size()) return false;
+    const QVariantList definitions = viewer.visualMaterials();
+    for (qsizetype index = 0; index < materials.size(); ++index) {
+        const QObject *const material = materials.at(index);
+        const QVariantMap definition = definitions.at(index).toMap();
+        if (!qFuzzyCompare(
+                    material->property("metalness").toFloat(),
+                    definition.value(QStringLiteral("metalness")).toFloat()) ||
+            !qFuzzyCompare(
+                    material->property("specularAmount").toFloat(),
+                    definition.value(QStringLiteral("specularAmount"))
+                            .toFloat())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool VisualMaterialScalarsEqual(const QList<QObject *> &materials,
+                                float metalness,
+                                float specularAmount) {
+    return !materials.isEmpty() &&
+            std::all_of(materials.cbegin(), materials.cend(),
+                        [metalness, specularAmount](const QObject *material) {
+                            return std::abs(
+                                           material->property("metalness")
+                                                           .toFloat() -
+                                           metalness) < 0.0001f &&
+                                    std::abs(
+                                           material
+                                                   ->property("specularAmount")
+                                                   .toFloat() -
+                                           specularAmount) < 0.0001f;
+                        });
+}
+
+bool VisualBaseTextureFiltersMatchSharpMode(
+        const QList<QObject *> &textures,
+        const forevertas::viewer::RaceViewerController &viewer) {
+    const QVariantList definitions = viewer.visualMaterials();
+    if (textures.isEmpty() || textures.size() != definitions.size()) {
+        return false;
+    }
+    for (qsizetype index = 0; index < textures.size(); ++index) {
+        const QObject *const texture = textures.at(index);
+        const QVariantMap definition = definitions.at(index).toMap();
+        const QString materialClass =
+                definition.value(QStringLiteral("materialClass")).toString();
+        const bool preserveBaseMip =
+                definition.value(QStringLiteral("alphaMode")).toString() ==
+                        QStringLiteral("opaque") &&
+                materialClass != QStringLiteral("Grass") &&
+                materialClass != QStringLiteral("Dirt") &&
+                materialClass != QStringLiteral("Asphalt");
+        if (RuntimeEnumPropertyKey(texture, "minFilter") !=
+                    (preserveBaseMip ? QByteArrayLiteral("Nearest")
+                                     : QByteArrayLiteral("Linear")) ||
+            RuntimeEnumPropertyKey(texture, "mipFilter") !=
+                    (preserveBaseMip ? QByteArrayLiteral("None")
+                                     : QByteArrayLiteral("Linear"))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool VisualNativeMapsMatchLighting(
         const QList<QObject *> &materials,
         const forevertas::viewer::RaceViewerController &viewer,
@@ -265,18 +339,40 @@ bool VisualNativeMapsMatchLighting(
                 material->property("normalMap").value<QObject *>();
         QObject *const specularMap =
                 material->property("specularMap").value<QObject *>();
+        QObject *const occlusionMap =
+                material->property("occlusionMap").value<QObject *>();
         const bool expectNormal = !authoredLighting &&
                 definition.value(QStringLiteral("nativeNormal")).toBool();
         const bool expectSpecular = !authoredLighting &&
                 definition.value(QStringLiteral("nativeSpecular")).toBool();
+        const bool expectOcclusion =
+                definition.value(QStringLiteral("nativeOcclusion")).toBool();
         if ((normalMap != nullptr) != expectNormal ||
-            (specularMap != nullptr) != expectSpecular) {
+            (specularMap != nullptr) != expectSpecular ||
+            (occlusionMap != nullptr) != expectOcclusion) {
             return false;
         }
         if ((normalMap != nullptr &&
              !normalMap->property("source").toUrl().isLocalFile()) ||
             (specularMap != nullptr &&
-             !specularMap->property("source").toUrl().isLocalFile())) {
+             !specularMap->property("source").toUrl().isLocalFile()) ||
+            (occlusionMap != nullptr &&
+             (!occlusionMap->property("source").toUrl().isLocalFile() ||
+              occlusionMap->property("indexUV").toInt() !=
+                      definition.value(QStringLiteral("occlusionUvSet"))
+                              .toInt() ||
+              occlusionMap->property("generateMipmaps").toBool() !=
+                      definition
+                              .value(QStringLiteral(
+                                      "occlusionGenerateMipmaps"))
+                              .toBool()))) {
+            return false;
+        }
+        if (expectOcclusion &&
+            (RuntimeEnumPropertyKey(material, "occlusionChannel") !=
+                     QByteArrayLiteral("R") ||
+             std::abs(material->property("occlusionAmount").toFloat() -
+                      1.0f) > 0.0001f)) {
             return false;
         }
 
@@ -5567,6 +5663,18 @@ int main(int argc, char **argv) {
                                                   visualBaseTextures.front(),
                                                   "mipFilter");
                                 graphicsSettings.setTextureFiltering(
+                                        QStringLiteral("sharp"));
+                                QCoreApplication::processEvents();
+                                textureFilteringValid &=
+                                        VisualBaseTextureFiltersMatchSharpMode(
+                                                visualBaseTextures, viewer);
+                                const QByteArray sharpMipFilter =
+                                        visualBaseTextures.isEmpty()
+                                        ? QByteArrayLiteral("missing")
+                                        : RuntimeEnumPropertyKey(
+                                                  visualBaseTextures.front(),
+                                                  "mipFilter");
+                                graphicsSettings.setTextureFiltering(
                                         QStringLiteral("trilinear"));
                                 QCoreApplication::processEvents();
                                 textureFilteringValid &=
@@ -5824,6 +5932,8 @@ int main(int argc, char **argv) {
                                         VisualNativeMapsMatchLighting(
                                                 visualMaterials, viewer,
                                                 false) &&
+                                        VisualMaterialScalarsMatchDefinitions(
+                                                visualMaterials, viewer) &&
                                         mainMapLight != nullptr &&
                                         fillMapLight != nullptr &&
                                         mainMapLight->property("visible")
@@ -5856,6 +5966,8 @@ int main(int argc, char **argv) {
                                         VisualNativeMapsMatchLighting(
                                                 visualMaterials, viewer,
                                                 true) &&
+                                        VisualMaterialScalarsEqual(
+                                                visualMaterials, 0.0f, 0.0f) &&
                                         mainMapLight->property("visible")
                                                 .toBool() &&
                                         fillMapLight->property("visible")
@@ -5994,6 +6106,8 @@ int main(int argc, char **argv) {
                                                 << "/"
                                                 << bilinearMipFilter.constData()
                                                 << "/"
+                                                << sharpMipFilter.constData()
+                                                << "/"
                                                 << restoredMipFilter.constData()
                                                 << ")"
                                                 << ", scene="
@@ -6110,7 +6224,9 @@ int main(int argc, char **argv) {
                                                                             "normalMap")
                                                                     .value<QObject *>() ==
                                                             nullptr;
-                                                });
+                                                }) &&
+                                        VisualMaterialScalarsEqual(
+                                                visualMaterials, 0.0f, 1.0f);
                                 root->setProperty(
                                         "renderMode",
                                         QStringLiteral("collision"));
@@ -6184,7 +6300,9 @@ int main(int argc, char **argv) {
                                                 selectedCarWireModels,
                                                 static_cast<int>(
                                                         viewer.ellipsoidCount()),
-                                                false);
+                                                false) &&
+                                        VisualMaterialScalarsEqual(
+                                                visualMaterials, 0.0f, 0.0f);
 
                                 auto *const whiteboardOverlay =
                                         qobject_cast<QQuickItem *>(
@@ -7589,6 +7707,8 @@ int main(int argc, char **argv) {
                                             << initialMipFilter.constData()
                                             << "/"
                                             << bilinearMipFilter.constData()
+                                            << "/"
+                                            << sharpMipFilter.constData()
                                             << "/"
                                             << restoredMipFilter.constData()
                                             << ")"

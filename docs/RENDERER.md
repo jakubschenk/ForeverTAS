@@ -24,24 +24,28 @@ rubber include independently sourced tangent-space normal and scalar roughness
 maps. Other classes deliberately use scalar PBR values instead of fabricated
 detail maps. Turbo uses right-facing cyan and yellow directional arrows,
 checkpoints use colored bands, and start/finish components use a checker
-pattern. Concrete is a deliberately flat gray. Broad, horizontal surface-0
-meshes attached to authored blocks are recognized as grass ground cover instead
-of inheriting the generic concrete fallback. This makes gameplay surfaces
-recognizable even when every source material path is empty. Dense grass-blade
+pattern. Concrete is a deliberately flat gray. Broad, horizontal meshes on
+the known grass surface IDs attached to authored blocks are recognized as
+grass ground cover before sampler-name fallback. This prevents the legacy
+`PreLightGen` helper sampler from being mistaken for emission and makes
+gameplay surfaces recognizable even when every source material path is empty.
+Dense grass-blade
 and grass-overlay meshes are removed before batching; only opaque ground
 surfaces remain. Asphalt, grass, dirt, and concrete also ignore source
 vertex-color tint because those channels encode game-specific data that can turn
 replacement textures pale or orange.
 
-`src/viewer/native_material.*` selects diffuse, blend, normal, and specular
-slots by the legacy sampler names. Multi-layer albedo follows the original
+`src/viewer/native_material.*` selects diffuse, blend, normal, specular, and
+the narrowly verified block-grass occlusion slots by the legacy sampler names.
+Multi-layer albedo follows the original
 blend equation, and a small explicit shader table supplies transparency,
 two-sided, unlit, clamp/flip, water, and projection behavior. The eleven known
 PDiff-family shaders sample exact world X/Z coordinates at one repeat per 16
 metres. ForeverValidator preserves both readable plain material/model/shader
 paths and selected archive identities so a hashed installed path cannot erase
-those semantics. Other meshes retain authored UV0; the old randomized terrain
-remeshing is not used.
+those semantics. `StadiumGrassOcc` keeps its baked red-channel `TOcc` atlas on
+authored UV1 while its albedo remains world-projected on UV0. Other meshes
+retain authored UV0; the old randomized terrain remeshing is not used.
 
 If an asset is absent, inline/generated, unsupported, or fails validation, the
 existing semantic replacement material remains available and the failure is
@@ -63,8 +67,9 @@ are suppressed.
 
 The QML scene creates one `Model` per batch and one shared
 `PrincipledMaterial` per source-material/vertex-color binding. Base, normal,
-and specular maps use explicit sampler orientation, wrapping, filtering, mip,
-alpha, and culling state. Static geometry is rebuilt only after a successful
+specular, and verified occlusion maps use explicit sampler orientation,
+wrapping, UV selection, filtering, mip, alpha, and culling state. Static
+geometry is rebuilt only after a successful
 replay reload; playback updates car transforms without touching map resources.
 
 Native + static sun is the default. It keeps the authored diffuse composition,
@@ -73,7 +78,10 @@ energy sky, sun, and fill contributions with linear-to-sRGB tonemapping. This
 avoids the near-black result caused by sending linear material output directly
 to the display. The shared `DefaultPreLightGen.Texture.Gbx` input is a runtime
 shader resource, not a per-material image that can be extracted as a baked
-lightmap. A compatibility setting enables stronger dynamic fragment lighting,
+lightmap. Likewise, `PreLightGen` sampler names on block and surrounding
+Stadium grass do not make those materials emissive; authored grass identity
+and collision semantics take precedence. A compatibility setting enables
+stronger dynamic fragment lighting,
 normal/specular maps, ACES tonemapping, and optional world shadows. MSAA and
 texture filtering are persistent graphics settings; bilinear mode still uses
 the authored/generated mip chain and trilinear mode blends between mip levels.

@@ -2265,6 +2265,13 @@ ApplicationWindow {
                                 Texture {
                                     id: replacementBaseMap
                                     objectName: "trackVisualBaseTexture"
+                                    readonly property bool sharpDetailFiltering:
+                                        window.textureFiltering ===
+                                        "sharp"
+                                        && modelData.alphaMode === "opaque"
+                                        && modelData.materialClass !== "Grass"
+                                        && modelData.materialClass !== "Dirt"
+                                        && modelData.materialClass !== "Asphalt"
                                     source: modelData.baseTexture
                                     tilingModeHorizontal: modelData.repeat
                                                           ? Texture.Repeat
@@ -2276,11 +2283,16 @@ ApplicationWindow {
                                     autoOrientation: false
                                     generateMipmaps:
                                         modelData.albedoGenerateMipmaps
-                                    minFilter: Texture.Linear
+                                    minFilter: sharpDetailFiltering
+                                               ? Texture.Nearest
+                                               : Texture.Linear
                                     magFilter: Texture.Linear
-                                    mipFilter: window.textureFiltering ===
-                                               "bilinear"
-                                               ? Texture.Nearest : Texture.Linear
+                                    mipFilter: sharpDetailFiltering
+                                               ? Texture.None
+                                               : (window.textureFiltering ===
+                                                  "bilinear"
+                                                  ? Texture.Nearest
+                                                  : Texture.Linear)
                                 }
 
                                 Texture {
@@ -2315,6 +2327,26 @@ ApplicationWindow {
                                     mipFilter: replacementBaseMap.mipFilter
                                 }
 
+                                Texture {
+                                    id: nativeOcclusionMap
+                                    objectName: "trackVisualOcclusionTexture"
+                                    source: modelData.occlusionTexture
+                                    // TM's TOcc atlas is authored against the
+                                    // mesh's secondary texture coordinates;
+                                    // UV0 may be replaced by world-XZ grass
+                                    // projection and cannot address this map.
+                                    indexUV: modelData.occlusionUvSet
+                                    tilingModeHorizontal: Texture.ClampToEdge
+                                    tilingModeVertical: Texture.ClampToEdge
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.occlusionGenerateMipmaps
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: Texture.Linear
+                                }
+
                                 lighting: modelData.unlit
                                           ? PrincipledMaterial.NoLighting
                                           : PrincipledMaterial.FragmentLighting
@@ -2333,16 +2365,41 @@ ApplicationWindow {
                                            "neutral"
                                            ? 0.74
                                            : modelData.roughness
-                                metalness: window.renderMode ===
-                                           "neutral"
+                                // Authored track textures already contain the
+                                // game's baked lighting. Keep the low-energy
+                                // diffuse lights for readability, but do not
+                                // synthesize a second layer of PBR reflections
+                                // over grass, road paint, or stadium panels.
+                                metalness: window.authoredLighting
+                                           && window.renderMode === "textured"
                                            ? 0
-                                           : modelData.metalness
+                                           : (window.renderMode === "neutral"
+                                              ? 0
+                                              : modelData.metalness)
+                                specularAmount: window.authoredLighting
+                                                && window.renderMode ===
+                                                   "textured"
+                                                ? 0
+                                                : (window.renderMode ===
+                                                   "neutral"
+                                                   ? 1.0
+                                                   : modelData.specularAmount)
                                 normalMap: !window.authoredLighting
                                            && modelData.nativeNormal
                                            ? nativeNormalMap : null
                                 specularMap: !window.authoredLighting
                                              && modelData.nativeSpecular
                                              ? nativeSpecularMap : null
+                                // Occlusion is baked into TM block materials,
+                                // so preserve it in both authored and dynamic
+                                // lighting modes. This is what darkens grass
+                                // underneath start/finish and other blocks.
+                                occlusionMap: window.renderMode === "textured"
+                                              && modelData.nativeOcclusion
+                                              ? nativeOcclusionMap : null
+                                occlusionChannel: Material.R
+                                occlusionAmount: modelData.nativeOcclusion
+                                                 ? 1.0 : 0.0
                                 alphaMode: modelData.alphaMode === "masked"
                                            ? PrincipledMaterial.Mask
                                            : (modelData.alphaMode === "blended"
@@ -2417,7 +2474,8 @@ ApplicationWindow {
                                     magFilter: Texture.Linear
                                     mipFilter: window.textureFiltering ===
                                                "bilinear"
-                                               ? Texture.Nearest : Texture.Linear
+                                               ? Texture.Nearest
+                                               : Texture.Linear
                                 }
 
                                 Texture {
@@ -4489,7 +4547,7 @@ ApplicationWindow {
                         Layout.rightMargin: 20
                         title: qsTr("Graphics")
                         description: qsTr(
-                            "Native mode combines the map textures with a static sun and ambient fill while keeping dynamic shadows off. Qt 6.8 maps Highest filtering to trilinear.")
+                            "Native mode combines baked map textures with a restrained static sun. Qt 6.8 cannot request anisotropic filtering; Sharp hard surfaces keeps full-resolution detail on opaque structures while leaving grass, dirt, and asphalt stable, but can shimmer while moving.")
 
                         SettingCombo {
                             label: qsTr("Lighting")
@@ -4539,8 +4597,8 @@ ApplicationWindow {
                                   "value": "bilinear" },
                                 { "label": qsTr("Trilinear"),
                                   "value": "trilinear" },
-                                { "label": qsTr("Highest available"),
-                                  "value": "anisotropic" }
+                                { "label": qsTr("Sharp hard surfaces (may shimmer)"),
+                                  "value": "sharp" }
                             ]
                             onSelected: value => {
                                 if (window.graphicsSettings)
@@ -4575,9 +4633,11 @@ ApplicationWindow {
                             objectName: "nativeTextureTelemetryLabel"
                             Layout.fillWidth: true
                             visible: window.viewer.loaded
-                            text: qsTr("%1 native | %2 fallback | %3/%4 textures | %5 memory/%6 disk hits | %7 MiB | %8 ms")
+                            text: qsTr("%1 native | %2 AO | %3 fallback | %4/%5 textures | %6 memory/%7 disk hits | %8 MiB | %9 ms")
                                   .arg(window.viewer.rendererTelemetry
                                            .nativeMaterials ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .occlusionMaterials ?? 0)
                                   .arg(window.viewer.rendererTelemetry
                                            .fallbackMaterials ?? 0)
                                   .arg(window.viewer.rendererTelemetry

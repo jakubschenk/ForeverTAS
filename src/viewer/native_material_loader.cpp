@@ -427,6 +427,21 @@ NativeMaterialLoadResult LoadNativeMaterials(
                 runtime.nativeSpecular = true;
             }
         }
+        const auto occlusion = loader.Read(
+                material, runtime.profile.occlusionBitmap,
+                &runtime.diagnostic);
+        if (occlusion) {
+            const CachedNativeTexture cachedOcclusion = loader.Cache(
+                    *occlusion, NativeTextureSemantic::LinearData,
+                    &runtime.diagnostic);
+            if (cachedOcclusion) {
+                runtime.occlusionTexture = cachedOcclusion.source;
+                runtime.occlusionGenerateMipmaps =
+                        cachedOcclusion.generateMipmaps;
+                runtime.nativeOcclusion = true;
+                ++result.telemetry.occlusionMaterialCount;
+            }
+        }
 
         result.telemetry.worldProjectedMaterialCount +=
                 runtime.profile.renderState.worldXz ? 1u : 0u;

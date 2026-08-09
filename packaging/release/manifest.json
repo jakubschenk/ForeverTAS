@@ -12,7 +12,7 @@
     },
     "forevervalidator": {
       "repository": "https://github.com/jakubschenk/ForeverValidator.git",
-      "commit": "3ae3b86b2fa86c5c76ebf0d036d9c4cf1527b55b",
+      "commit": "3dca7ffa15f57696bc97d18816d036828ec9a6a9",
       "version": "0.2.2"
     }
   },
@@ -30,6 +30,7 @@
       "docs/pr-experimental-renderer-visual-regressions.md",
       "docs/pr-material-texture-assets.md",
       "docs/pr-renderer-material-semantic-paths.md",
+      "docs/pr-renderer-skidmark-state-fidelity.md",
       "docs/pr-vehicle-material-relative-resolution.md",
       "docs/pr-vehicle-render-scene-wheel-state.md",
       "include/forevervalidator/experimental/physics_sandbox.h",
@@ -64,7 +65,8 @@
       "src/validation/api/validation_api.cpp",
       "tests/installed_pack_asset_source_tests.cpp",
       "tests/render_scene_tests.cpp",
-      "tests/vehicle_render_scene_fixture_tests.cpp"
+      "tests/vehicle_render_scene_fixture_tests.cpp",
+      "tests/wheel_ground_state_fixture_tests.cpp"
     ]
   },
   "toolchains": {

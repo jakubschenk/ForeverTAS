@@ -109,14 +109,15 @@ constexpr std::array<ShaderRule, 4> AdditionalShaderRules{{
 }};
 
 // These readable model identities are required to recover TM's world-space
-// grass mapping when the selected installed model path is an opaque hash. Do
-// not feed every plain model through ShaderRules: several legacy rules encode
-// gbx3d rendering heuristics (for example broad transparency) that are not
-// valid for all native Stadium materials.
-constexpr std::array<std::string_view, 3> PlainWorldXzModelRules{{
+// grass and dirt mapping when the selected installed model path is an opaque
+// hash. Do not feed every plain model through ShaderRules: several legacy rules
+// encode gbx3d rendering heuristics (for example broad transparency) that are
+// not valid for all native Stadium materials.
+constexpr std::array<std::string_view, 4> PlainWorldXzModelRules{{
         "techno2/media/material/pdiff pdiff pa px2 grass2",
         "techno2/media/material/pdiff pdiff pa tocc px2 grass",
         "techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv",
+        "techno2/media/material/soilgen21",
 }};
 
 // StadiumGrassFence is helper geometry whose FenceA/FadeXZ shader fades
@@ -130,6 +131,12 @@ constexpr std::string_view PlainGrassFenceModel =
         "techno2/media/material/vdep fence";
 constexpr std::string_view PlainGrassFenceShader =
         "techno2/media/shader/vdep fence pc3";
+constexpr std::string_view PlainGrassOcclusionMaterial =
+        "stadium/media/material/stadiumgrassocc";
+constexpr std::array<std::string_view, 2> PlainGrassOcclusionModels{{
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass",
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv",
+}};
 
 std::string Normalize(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
@@ -269,8 +276,8 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     const std::string plainModel = CanonicalRulePath(
             material.modelPlainPath.empty() ? material.modelPath
                                             : material.modelPlainPath);
-    for (std::string_view grassModel : PlainWorldXzModelRules) {
-        if (EndsWithPath(plainModel, grassModel)) {
+    for (std::string_view worldXzModel : PlainWorldXzModelRules) {
+        if (EndsWithPath(plainModel, worldXzModel)) {
             profile.worldXz = true;
             profile.renderState.worldXz = true;
             break;
@@ -280,6 +287,23 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     const std::string plainMaterial = CanonicalRulePath(
             material.materialPlainPath.empty() ? material.sourcePath
                                                : material.materialPlainPath);
+    const bool grassOcclusionModel = std::any_of(
+            PlainGrassOcclusionModels.cbegin(),
+            PlainGrassOcclusionModels.cend(),
+            [&plainModel](std::string_view model) {
+                return EndsWithPath(plainModel, model);
+            });
+    // StadiumGrassOcc is a block-owned grass layer. Its repeating albedo uses
+    // generated world-XZ UV0, while its baked TOcc atlas is authored against
+    // the preserved secondary coordinates. Keep this deliberately narrow:
+    // other legacy materials also expose an "Occlusion" sampler but their UV
+    // policy has not been established and some meshes do not carry UV1.
+    if (profile.visible && profile.renderState.worldXz &&
+        EndsWithPath(plainMaterial, PlainGrassOcclusionMaterial) &&
+        grassOcclusionModel) {
+        profile.occlusionBitmap = FindSampler(material, "occlusion");
+        profile.occlusionUvSet = profile.occlusionBitmap >= 0 ? 1 : 0;
+    }
     const std::string plainShader = CanonicalRulePath(
             material.shaderPlainPath.empty() ? material.shaderPath
                                              : material.shaderPlainPath);
