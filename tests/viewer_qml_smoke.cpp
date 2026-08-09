@@ -339,18 +339,40 @@ bool VisualNativeMapsMatchLighting(
                 material->property("normalMap").value<QObject *>();
         QObject *const specularMap =
                 material->property("specularMap").value<QObject *>();
+        QObject *const occlusionMap =
+                material->property("occlusionMap").value<QObject *>();
         const bool expectNormal = !authoredLighting &&
                 definition.value(QStringLiteral("nativeNormal")).toBool();
         const bool expectSpecular = !authoredLighting &&
                 definition.value(QStringLiteral("nativeSpecular")).toBool();
+        const bool expectOcclusion =
+                definition.value(QStringLiteral("nativeOcclusion")).toBool();
         if ((normalMap != nullptr) != expectNormal ||
-            (specularMap != nullptr) != expectSpecular) {
+            (specularMap != nullptr) != expectSpecular ||
+            (occlusionMap != nullptr) != expectOcclusion) {
             return false;
         }
         if ((normalMap != nullptr &&
              !normalMap->property("source").toUrl().isLocalFile()) ||
             (specularMap != nullptr &&
-             !specularMap->property("source").toUrl().isLocalFile())) {
+             !specularMap->property("source").toUrl().isLocalFile()) ||
+            (occlusionMap != nullptr &&
+             (!occlusionMap->property("source").toUrl().isLocalFile() ||
+              occlusionMap->property("indexUV").toInt() !=
+                      definition.value(QStringLiteral("occlusionUvSet"))
+                              .toInt() ||
+              occlusionMap->property("generateMipmaps").toBool() !=
+                      definition
+                              .value(QStringLiteral(
+                                      "occlusionGenerateMipmaps"))
+                              .toBool()))) {
+            return false;
+        }
+        if (expectOcclusion &&
+            (RuntimeEnumPropertyKey(material, "occlusionChannel") !=
+                     QByteArrayLiteral("R") ||
+             std::abs(material->property("occlusionAmount").toFloat() -
+                      1.0f) > 0.0001f)) {
             return false;
         }
 

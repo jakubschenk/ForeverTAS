@@ -2327,6 +2327,26 @@ ApplicationWindow {
                                     mipFilter: replacementBaseMap.mipFilter
                                 }
 
+                                Texture {
+                                    id: nativeOcclusionMap
+                                    objectName: "trackVisualOcclusionTexture"
+                                    source: modelData.occlusionTexture
+                                    // TM's TOcc atlas is authored against the
+                                    // mesh's secondary texture coordinates;
+                                    // UV0 may be replaced by world-XZ grass
+                                    // projection and cannot address this map.
+                                    indexUV: modelData.occlusionUvSet
+                                    tilingModeHorizontal: Texture.ClampToEdge
+                                    tilingModeVertical: Texture.ClampToEdge
+                                    flipV: modelData.flipV
+                                    autoOrientation: false
+                                    generateMipmaps:
+                                        modelData.occlusionGenerateMipmaps
+                                    minFilter: Texture.Linear
+                                    magFilter: Texture.Linear
+                                    mipFilter: Texture.Linear
+                                }
+
                                 lighting: modelData.unlit
                                           ? PrincipledMaterial.NoLighting
                                           : PrincipledMaterial.FragmentLighting
@@ -2370,6 +2390,16 @@ ApplicationWindow {
                                 specularMap: !window.authoredLighting
                                              && modelData.nativeSpecular
                                              ? nativeSpecularMap : null
+                                // Occlusion is baked into TM block materials,
+                                // so preserve it in both authored and dynamic
+                                // lighting modes. This is what darkens grass
+                                // underneath start/finish and other blocks.
+                                occlusionMap: window.renderMode === "textured"
+                                              && modelData.nativeOcclusion
+                                              ? nativeOcclusionMap : null
+                                occlusionChannel: Material.R
+                                occlusionAmount: modelData.nativeOcclusion
+                                                 ? 1.0 : 0.0
                                 alphaMode: modelData.alphaMode === "masked"
                                            ? PrincipledMaterial.Mask
                                            : (modelData.alphaMode === "blended"
@@ -4603,9 +4633,11 @@ ApplicationWindow {
                             objectName: "nativeTextureTelemetryLabel"
                             Layout.fillWidth: true
                             visible: window.viewer.loaded
-                            text: qsTr("%1 native | %2 fallback | %3/%4 textures | %5 memory/%6 disk hits | %7 MiB | %8 ms")
+                            text: qsTr("%1 native | %2 AO | %3 fallback | %4/%5 textures | %6 memory/%7 disk hits | %8 MiB | %9 ms")
                                   .arg(window.viewer.rendererTelemetry
                                            .nativeMaterials ?? 0)
+                                  .arg(window.viewer.rendererTelemetry
+                                           .occlusionMaterials ?? 0)
                                   .arg(window.viewer.rendererTelemetry
                                            .fallbackMaterials ?? 0)
                                   .arg(window.viewer.rendererTelemetry

@@ -131,6 +131,12 @@ constexpr std::string_view PlainGrassFenceModel =
         "techno2/media/material/vdep fence";
 constexpr std::string_view PlainGrassFenceShader =
         "techno2/media/shader/vdep fence pc3";
+constexpr std::string_view PlainGrassOcclusionMaterial =
+        "stadium/media/material/stadiumgrassocc";
+constexpr std::array<std::string_view, 2> PlainGrassOcclusionModels{{
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass",
+        "techno2/media/material/pdiff pdiff pa tocc px2 grass nolightv",
+}};
 
 std::string Normalize(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
@@ -281,6 +287,23 @@ NativeMaterialProfile ResolveNativeMaterialProfile(
     const std::string plainMaterial = CanonicalRulePath(
             material.materialPlainPath.empty() ? material.sourcePath
                                                : material.materialPlainPath);
+    const bool grassOcclusionModel = std::any_of(
+            PlainGrassOcclusionModels.cbegin(),
+            PlainGrassOcclusionModels.cend(),
+            [&plainModel](std::string_view model) {
+                return EndsWithPath(plainModel, model);
+            });
+    // StadiumGrassOcc is a block-owned grass layer. Its repeating albedo uses
+    // generated world-XZ UV0, while its baked TOcc atlas is authored against
+    // the preserved secondary coordinates. Keep this deliberately narrow:
+    // other legacy materials also expose an "Occlusion" sampler but their UV
+    // policy has not been established and some meshes do not carry UV1.
+    if (profile.visible && profile.renderState.worldXz &&
+        EndsWithPath(plainMaterial, PlainGrassOcclusionMaterial) &&
+        grassOcclusionModel) {
+        profile.occlusionBitmap = FindSampler(material, "occlusion");
+        profile.occlusionUvSet = profile.occlusionBitmap >= 0 ? 1 : 0;
+    }
     const std::string plainShader = CanonicalRulePath(
             material.shaderPlainPath.empty() ? material.shaderPath
                                              : material.shaderPlainPath);

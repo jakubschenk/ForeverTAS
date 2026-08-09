@@ -1181,12 +1181,16 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass,
                static_cast<qint64>(sourceMaterialIndex));
     map.insert(QStringLiteral("normalTexture"), QUrl{});
     map.insert(QStringLiteral("specularTexture"), QUrl{});
+    map.insert(QStringLiteral("occlusionTexture"), QUrl{});
     map.insert(QStringLiteral("albedoGenerateMipmaps"), true);
     map.insert(QStringLiteral("normalGenerateMipmaps"), true);
     map.insert(QStringLiteral("specularGenerateMipmaps"), true);
+    map.insert(QStringLiteral("occlusionGenerateMipmaps"), true);
     map.insert(QStringLiteral("nativeAlbedo"), false);
     map.insert(QStringLiteral("nativeNormal"), false);
     map.insert(QStringLiteral("nativeSpecular"), false);
+    map.insert(QStringLiteral("nativeOcclusion"), false);
+    map.insert(QStringLiteral("occlusionUvSet"), 0);
     map.insert(QStringLiteral("alphaMode"), QStringLiteral("unknown"));
     map.insert(QStringLiteral("opacity"), 1.0);
     map.insert(QStringLiteral("doubleSided"), true);
@@ -1203,6 +1207,7 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass,
     }
     map.insert(QStringLiteral("normalTexture"), native->normalTexture);
     map.insert(QStringLiteral("specularTexture"), native->specularTexture);
+    map.insert(QStringLiteral("occlusionTexture"), native->occlusionTexture);
     // The replacement texture remains bound when the native albedo cannot be
     // resolved. Keep mip generation enabled for that fallback instead of
     // inheriting the empty native runtime's default false value.
@@ -1212,9 +1217,14 @@ QVariantMap MaterialMap(ReplacementMaterialClass materialClass,
                native->normalGenerateMipmaps);
     map.insert(QStringLiteral("specularGenerateMipmaps"),
                native->specularGenerateMipmaps);
+    map.insert(QStringLiteral("occlusionGenerateMipmaps"),
+               native->occlusionGenerateMipmaps);
     map.insert(QStringLiteral("nativeAlbedo"), native->nativeAlbedo);
     map.insert(QStringLiteral("nativeNormal"), native->nativeNormal);
     map.insert(QStringLiteral("nativeSpecular"), native->nativeSpecular);
+    map.insert(QStringLiteral("nativeOcclusion"), native->nativeOcclusion);
+    map.insert(QStringLiteral("occlusionUvSet"),
+               native->profile.occlusionUvSet);
     map.insert(QStringLiteral("alphaMode"),
                StaticVisualAlphaModeName(
                        native->profile.renderState.alphaMode));
@@ -1594,6 +1604,9 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                 {QStringLiteral("nativeMaterials"),
                  static_cast<qint64>(nativeMaterials.telemetry
                                              .nativeMaterialCount)},
+                {QStringLiteral("occlusionMaterials"),
+                 static_cast<qint64>(nativeMaterials.telemetry
+                                             .occlusionMaterialCount)},
                 {QStringLiteral("fallbackMaterials"),
                  static_cast<qint64>(nativeMaterials.telemetry
                                              .fallbackMaterialCount)},

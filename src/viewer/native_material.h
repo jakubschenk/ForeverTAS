@@ -22,6 +22,8 @@ struct NativeMaterialProfile {
     int albedoBitmap = -1;
     int normalBitmap = -1;
     int specularBitmap = -1;
+    int occlusionBitmap = -1;
+    int occlusionUvSet = 0;
     int blend2Bitmap = -1;
     int blendMaskBitmap = -1;
     int blend3Bitmap = -1;

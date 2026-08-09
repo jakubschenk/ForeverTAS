@@ -136,7 +136,8 @@ ReplacementMaterialClass ClassifySemanticContext(
     if (material.water || surface == 13u) {
         return ReplacementMaterialClass::Water;
     }
-    if (surface == 0u && context.grassGroundCover) {
+    if (context.grassGroundCover &&
+        IsSurface(surface, {0u, 2u, 20u, 25u})) {
         return ReplacementMaterialClass::Grass;
     }
     if (ContainsAny(block, {"startline", "finishline", "multilap"})) {

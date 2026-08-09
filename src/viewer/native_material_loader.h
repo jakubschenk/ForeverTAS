@@ -18,14 +18,17 @@ struct NativeMaterialRuntime {
     QUrl albedoTexture;
     QUrl normalTexture;
     QUrl specularTexture;
+    QUrl occlusionTexture;
     QString albedoSourcePath;
     QString diagnostic;
     bool albedoGenerateMipmaps = false;
     bool normalGenerateMipmaps = false;
     bool specularGenerateMipmaps = false;
+    bool occlusionGenerateMipmaps = false;
     bool nativeAlbedo = false;
     bool nativeNormal = false;
     bool nativeSpecular = false;
+    bool nativeOcclusion = false;
 };
 
 struct NativeMaterialLoadTelemetry {
@@ -36,6 +39,7 @@ struct NativeMaterialLoadTelemetry {
     std::uint64_t memoryCacheHitCount = 0u;
     std::uint64_t diskCacheHitCount = 0u;
     std::uint64_t nativeMaterialCount = 0u;
+    std::uint64_t occlusionMaterialCount = 0u;
     std::uint64_t fallbackMaterialCount = 0u;
     std::uint64_t worldProjectedMaterialCount = 0u;
     std::uint64_t maskedMaterialCount = 0u;

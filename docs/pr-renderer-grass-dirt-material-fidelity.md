@@ -4,6 +4,10 @@
 
 This renderer follow-up fixes the remaining Stadium fidelity regressions:
 
+- stop `PreLightGen` helper samplers from misclassifying flat block-owned
+  grass as emissive material;
+- restore the baked `StadiumGrassOcc` occlusion atlas through the mesh's
+  secondary UV set without enabling unverified AO paths on unrelated assets;
 - prevent Qt's PBR model from adding new reflections over textures that
   already contain TrackMania's authored lighting;
 - recover the exact `SoilGen21` world-XZ mapping from its readable plain model
@@ -15,6 +19,29 @@ This renderer follow-up fixes the remaining Stadium fidelity regressions:
 
 The change keeps native TrackMania albedo textures and blend composition. It
 does not replace or post-process the game-owned assets.
+
+## Block-owned grass
+
+The reported pale/glossy footprint was not residual PBR specular. Grass under
+start/finish and road blocks carries a `PreLightGen` helper sampler. The
+fallback text classifier matched the word `light`, classified these otherwise
+flat surface-2 meshes as `Emissive`, and rebound their native albedo as 70%
+emission. Ordinary `StadiumGrass` was already classified as Grass, explaining
+the sharp visual mismatch despite both materials sharing the same
+`StadiumGrass1/2/Mask` albedo assets.
+
+Flat grass ground-cover semantics now take precedence for the known grass
+surface IDs, so block-owned cover uses the same non-emissive material contract
+as ordinary stadium grass. The `PreLightGen` sampler remains available to the
+legacy shader model but is never treated as evidence of emission.
+
+`StadiumGrassOcc` also owns a real baked occlusion atlas. Its repeating albedo
+uses generated world-XZ UV0, while replay geometry shows UV1 spanning the
+atlas. The renderer now loads that texture as linear red-channel occlusion and
+binds it through UV1 in authored and dynamic modes. Selection is intentionally
+limited to the exact `StadiumGrassOcc` + grass `TOcc` model identity; the same
+sampler name occurs on hundreds of unrelated road, fabric, dirt, and
+environment materials whose UV policy has not been established.
 
 ## Authored-lighting gloss
 
@@ -73,6 +100,10 @@ Paired dependency:
 
 - native material/texture test for hashed `SoilGen21` selected paths with a
   readable plain model identity;
+- exact material tests proving only block `StadiumGrassOcc` selects baked AO
+  on UV1 and an environment grass near-match remains excluded;
+- classifier regression proving a `PreLightGen` helper cannot turn flat
+  surface-2 block grass into an emissive material;
 - renderer unit suite, including exact `world.xz / 16` vertex mapping;
 - QML renderer-only smoke test on a real Stadium replay;
 - graphics-settings persistence, legacy filtering migration, authored-to-lit
@@ -81,7 +112,8 @@ Paired dependency:
   textures still resolve, while the coarse dirt tiles become continuous native
   detail and world-projected materials increase from 29 to 60;
 - same-camera `Abuk.Replay.Gbx` capture verifies the broad green start surface
-  loses its pale PBR highlight without darkening the authored albedo;
+  loses its pale self-lit footprint; controlled AO-off/on and UV0/UV1 captures
+  verify the remaining baked shadows use the aligned secondary atlas;
 - a fixed 90-m grazing-angle A/B capture verifies hard-surface detail changes
   while Grass, Dirt, and Asphalt remain stable; and
 - recorded-input renderer capture produces a real skidmark path, backed by the

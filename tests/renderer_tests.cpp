@@ -31,6 +31,7 @@ using forevertas::viewer::StaticVisualAlphaMode;
 using forevertas::viewer::StaticVisualBatch;
 using forevertas::viewer::StaticVisualBatchOptions;
 using forevertas::viewer::StaticVisualMaterialState;
+using forevervalidator::experimental::PhysicsSandboxMaterialBitmap;
 using forevervalidator::experimental::PhysicsSandboxRenderInstance;
 using forevervalidator::experimental::PhysicsSandboxRenderLayer;
 using forevervalidator::experimental::PhysicsSandboxRenderMaterial;
@@ -169,6 +170,19 @@ bool TestClassification() {
     okay &= Check(ClassifyMaterial(groundCover, groundCoverContext) ==
                           ReplacementMaterialClass::Grass,
                   "flat block ground cover did not classify as grass");
+    PhysicsSandboxRenderMaterial prelitGrassCover =
+            Named("StadiumGrassOcc");
+    prelitGrassCover.surfaceMaterialId = 2u;
+    PhysicsSandboxMaterialBitmap preLightSampler;
+    preLightSampler.samplerName = "PreLightGen";
+    prelitGrassCover.bitmaps.push_back(std::move(preLightSampler));
+    MaterialSemanticContext prelitGrassCoverContext;
+    prelitGrassCoverContext.blockName = "StadiumRoadMainStartLine";
+    prelitGrassCoverContext.grassGroundCover = true;
+    okay &= Check(ClassifyMaterial(prelitGrassCover,
+                                  prelitGrassCoverContext) ==
+                          ReplacementMaterialClass::Grass,
+                  "PreLightGen helper mislabeled block grass as emissive");
     okay &= Check(contextual(13u, "StadiumPool") ==
                           ReplacementMaterialClass::Water,
                   "pool provenance did not classify water");
