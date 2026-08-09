@@ -78,7 +78,10 @@ energy sky, sun, and fill contributions with linear-to-sRGB tonemapping. This
 avoids the near-black result caused by sending linear material output directly
 to the display. The shared `DefaultPreLightGen.Texture.Gbx` input is a runtime
 shader resource, not a per-material image that can be extracted as a baked
-lightmap. A compatibility setting enables stronger dynamic fragment lighting,
+lightmap. Likewise, `PreLightGen` sampler names on block and surrounding
+Stadium grass do not make those materials emissive; authored grass identity
+and collision semantics take precedence. A compatibility setting enables
+stronger dynamic fragment lighting,
 normal/specular maps, ACES tonemapping, and optional world shadows. MSAA and
 texture filtering are persistent graphics settings; bilinear mode still uses
 the authored/generated mip chain and trilinear mode blends between mip levels.

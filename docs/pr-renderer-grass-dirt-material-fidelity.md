@@ -4,8 +4,8 @@
 
 This renderer follow-up fixes the remaining Stadium fidelity regressions:
 
-- stop `PreLightGen` helper samplers from misclassifying flat block-owned
-  grass as emissive material;
+- stop `PreLightGen` helper samplers from misclassifying flat block-owned and
+  surrounding Stadium environment grass as emissive material;
 - restore the baked `StadiumGrassOcc` occlusion atlas through the mesh's
   secondary UV set without enabling unverified AO paths on unrelated assets;
 - prevent Qt's PBR model from adding new reflections over textures that
@@ -33,7 +33,16 @@ the sharp visual mismatch despite both materials sharing the same
 Flat grass ground-cover semantics now take precedence for the known grass
 surface IDs, so block-owned cover uses the same non-emissive material contract
 as ordinary stadium grass. The `PreLightGen` sampler remains available to the
-legacy shader model but is never treated as evidence of emission.
+legacy shader model but is not treated as evidence of emission for these grass
+materials.
+
+The surrounding stadium uses a separate hashed material whose readable
+identity is `StadiumWarpGrassPreLightGen`. It is not attached to block
+provenance, so the ground-cover rule cannot identify it. Authored grass
+material/model identities on the known grass collision surfaces now also take
+precedence when the exact `PreLightGen` helper sampler is present. This removes
+the same self-lit sheen from the outer stadium without weakening genuinely
+emissive grass identities or surface-22 start, checkpoint, and turbo lights.
 
 `StadiumGrassOcc` also owns a real baked occlusion atlas. Its repeating albedo
 uses generated world-XZ UV0, while replay geometry shows UV1 spanning the
@@ -103,7 +112,7 @@ Paired dependency:
 - exact material tests proving only block `StadiumGrassOcc` selects baked AO
   on UV1 and an environment grass near-match remains excluded;
 - classifier regression proving a `PreLightGen` helper cannot turn flat
-  surface-2 block grass into an emissive material;
+  surface-2 block or Stadium environment grass into an emissive material;
 - renderer unit suite, including exact `world.xz / 16` vertex mapping;
 - QML renderer-only smoke test on a real Stadium replay;
 - graphics-settings persistence, legacy filtering migration, authored-to-lit
