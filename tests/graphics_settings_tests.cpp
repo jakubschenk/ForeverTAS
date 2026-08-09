@@ -42,6 +42,8 @@ bool TestDefaults() {
                   "textureFiltering default was not trilinear");
     okay &= Check(!settings.worldShadows(),
                   "worldShadows default was not false");
+    okay &= Check(settings.vehicleContactShadows(),
+                  "vehicleContactShadows default was not true");
     okay &= Check(settings.skidmarksEnabled(),
                   "skidmarksEnabled default was not true");
     return okay;
@@ -60,9 +62,10 @@ bool TestPersistence() {
         GraphicsSettings settings(path);
         settings.setRenderMode(QStringLiteral("wireframe"));
         settings.setLightingMode(QStringLiteral("lit"));
-        settings.setMsaaSamples(4);
+        settings.setMsaaSamples(8);
         settings.setTextureFiltering(QStringLiteral("sharp"));
         settings.setWorldShadows(true);
+        settings.setVehicleContactShadows(false);
         settings.setSkidmarksEnabled(false);
     }
 
@@ -74,7 +77,7 @@ bool TestPersistence() {
                                .toString() == QStringLiteral("lit"),
                    "lightingMode was not persisted");
     okay &= Check(restoredFile.value(QStringLiteral("graphics/msaaSamples")).toInt() ==
-                          4,
+                          8,
                   "msaaSamples was not persisted");
     okay &= Check(restoredFile.value(QStringLiteral("graphics/textureFiltering"))
                                .toString() == QStringLiteral("sharp"),
@@ -82,6 +85,11 @@ bool TestPersistence() {
     okay &= Check(restoredFile.value(QStringLiteral("graphics/worldShadows"))
                                   .toBool() == true,
                   "worldShadows was not persisted");
+    okay &= Check(
+            !restoredFile
+                     .value(QStringLiteral("graphics/vehicleContactShadows"))
+                     .toBool(),
+            "vehicleContactShadows was not persisted");
     okay &= Check(
             !restoredFile.value(QStringLiteral("graphics/skidmarksEnabled"))
                      .toBool(),
@@ -92,12 +100,14 @@ bool TestPersistence() {
                   "renderMode was not restored");
     okay &= Check(restored.lightingMode() == QStringLiteral("lit"),
                   "lightingMode was not restored");
-    okay &= Check(restored.msaaSamples() == 4,
+    okay &= Check(restored.msaaSamples() == 8,
                   "msaaSamples was not restored");
     okay &= Check(restored.textureFiltering() == QStringLiteral("sharp"),
                   "textureFiltering was not restored");
     okay &= Check(restored.worldShadows(),
                   "worldShadows was not restored");
+    okay &= Check(!restored.vehicleContactShadows(),
+                  "vehicleContactShadows was not restored");
     okay &= Check(!restored.skidmarksEnabled(),
                   "skidmarksEnabled was not restored");
     return okay;
@@ -119,6 +129,7 @@ bool TestInvalidRepairs() {
         damaged.setValue(QStringLiteral("graphics/textureFiltering"),
                          QStringLiteral("pixelated"));
         damaged.setValue(QStringLiteral("graphics/worldShadows"), 2);
+        damaged.setValue(QStringLiteral("graphics/vehicleContactShadows"), 2);
         damaged.setValue(QStringLiteral("graphics/skidmarksEnabled"), 2);
         damaged.sync();
     }
@@ -134,6 +145,8 @@ bool TestInvalidRepairs() {
                   "invalid textureFiltering was not repaired");
     okay &= Check(!repaired.worldShadows(),
                   "invalid worldShadows was not repaired");
+    okay &= Check(repaired.vehicleContactShadows(),
+                  "invalid vehicleContactShadows was not repaired");
     okay &= Check(repaired.skidmarksEnabled(),
                   "invalid skidmarksEnabled was not repaired");
 
@@ -153,6 +166,11 @@ bool TestInvalidRepairs() {
     okay &= Check(!repairedFile.value(QStringLiteral("graphics/worldShadows"))
                                   .toBool(),
                   "repaired worldShadows was not persisted");
+    okay &= Check(
+            repairedFile
+                    .value(QStringLiteral("graphics/vehicleContactShadows"))
+                    .toBool(),
+            "repaired vehicleContactShadows was not persisted");
     okay &= Check(
             repairedFile.value(QStringLiteral("graphics/skidmarksEnabled"))
                     .toBool(),
@@ -185,7 +203,10 @@ bool TestMigration() {
                   "legacy textured-rt was not migrated") &&
             Check(settings.textureFiltering() == QStringLiteral("trilinear"),
                   "legacy anisotropic filtering was not migrated");
-    if (!okay) {
+    const bool contactShadowsDefaulted = Check(
+            settings.vehicleContactShadows(),
+            "legacy settings did not default vehicleContactShadows to true");
+    if (!okay || !contactShadowsDefaulted) {
         return false;
     }
 
@@ -212,6 +233,7 @@ bool TestSignals() {
     int msaaChanges = 0;
     int filteringChanges = 0;
     int shadowChanges = 0;
+    int contactShadowChanges = 0;
     int skidmarkChanges = 0;
 
     QObject::connect(&settings, &GraphicsSettings::renderModeChanged, [&]() {
@@ -230,6 +252,9 @@ bool TestSignals() {
     QObject::connect(&settings, &GraphicsSettings::worldShadowsChanged, [&]() {
         ++shadowChanges;
     });
+    QObject::connect(&settings,
+                     &GraphicsSettings::vehicleContactShadowsChanged,
+                     [&]() { ++contactShadowChanges; });
     QObject::connect(&settings, &GraphicsSettings::skidmarksEnabledChanged,
                      [&]() { ++skidmarkChanges; });
 
@@ -243,6 +268,8 @@ bool TestSignals() {
     settings.setTextureFiltering(QStringLiteral("sharp"));
     settings.setWorldShadows(true);
     settings.setWorldShadows(true);
+    settings.setVehicleContactShadows(false);
+    settings.setVehicleContactShadows(false);
     settings.setSkidmarksEnabled(false);
     settings.setSkidmarksEnabled(false);
 
@@ -253,6 +280,8 @@ bool TestSignals() {
     okay &= Check(filteringChanges == 1,
                   "textureFilteringChanged emitted twice");
     okay &= Check(shadowChanges == 1, "worldShadowsChanged emitted twice");
+    okay &= Check(contactShadowChanges == 1,
+                  "vehicleContactShadowsChanged emitted twice");
     okay &= Check(skidmarkChanges == 1,
                   "skidmarksEnabledChanged emitted twice");
     return okay;

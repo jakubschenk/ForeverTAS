@@ -187,6 +187,7 @@ struct BatchKey {
             PhysicsSandboxScenePurpose::Environment;
     bool vertexColors = false;
     bool doubleSided = false;
+    bool castsShadows = true;
     bool defaultVisible = false;
     bool spatiallyPartitioned = false;
     std::int64_t cellX = 0;
@@ -194,7 +195,7 @@ struct BatchKey {
 
     auto asTuple() const {
         return std::tie(sourceMaterialIndex, materialClass, alphaMode, purpose,
-                        vertexColors, doubleSided, defaultVisible,
+                        vertexColors, doubleSided, castsShadows, defaultVisible,
                         spatiallyPartitioned, cellX, cellZ);
     }
 };
@@ -216,7 +217,8 @@ BatchKey MakeBatchKey(std::uint32_t sourceMaterialIndex,
                       ReplacementMaterialClass materialClass,
                       StaticVisualMaterialState materialState,
                       PhysicsSandboxScenePurpose purpose, bool vertexColors,
-                      bool defaultVisible, bool spatiallyPartitioned,
+                      bool castsShadows, bool defaultVisible,
+                      bool spatiallyPartitioned,
                       std::int64_t cellX, std::int64_t cellZ) {
     return {sourceMaterialIndex,
             materialClass,
@@ -224,6 +226,7 @@ BatchKey MakeBatchKey(std::uint32_t sourceMaterialIndex,
             purpose,
             vertexColors,
             materialState.doubleSided,
+            castsShadows,
             defaultVisible,
             spatiallyPartitioned,
             cellX,
@@ -1153,6 +1156,86 @@ CameraClipPlanes CalculateCameraClipPlanes(const QVector3D &cameraPosition,
     return {nearPlane, farPlane};
 }
 
+CameraClipPlanes CalculateCameraClipPlanes(
+        const QVector3D &cameraPosition,
+        const QVector3D &cameraForward,
+        float cameraDistance,
+        const std::vector<CameraClipBounds> &bounds) {
+    const bool finiteCamera = std::isfinite(cameraPosition.x()) &&
+            std::isfinite(cameraPosition.y()) &&
+            std::isfinite(cameraPosition.z());
+    const bool finiteForward = std::isfinite(cameraForward.x()) &&
+            std::isfinite(cameraForward.y()) &&
+            std::isfinite(cameraForward.z());
+    if (!finiteCamera || !finiteForward ||
+        cameraForward.lengthSquared() < 1.0e-8f || bounds.empty()) {
+        if (bounds.empty()) {
+            return {0.05f, 1000.0f};
+        }
+        QVector3D minimum = bounds.front().minimum;
+        QVector3D maximum = bounds.front().maximum;
+        for (const CameraClipBounds &entry : bounds) {
+            ExpandBounds(entry.minimum, minimum, maximum);
+            ExpandBounds(entry.maximum, minimum, maximum);
+        }
+        return CalculateCameraClipPlanes(cameraPosition, cameraDistance,
+                                         minimum, maximum);
+    }
+
+    const QVector3D forward = cameraForward.normalized();
+    float farthestDepth = 0.0f;
+    float nearestDepth = std::numeric_limits<float>::infinity();
+    for (const CameraClipBounds &entry : bounds) {
+        const QVector3D minimum(
+                std::min(entry.minimum.x(), entry.maximum.x()),
+                std::min(entry.minimum.y(), entry.maximum.y()),
+                std::min(entry.minimum.z(), entry.maximum.z()));
+        const QVector3D maximum(
+                std::max(entry.minimum.x(), entry.maximum.x()),
+                std::max(entry.minimum.y(), entry.maximum.y()),
+                std::max(entry.minimum.z(), entry.maximum.z()));
+        const QVector3D center = (minimum + maximum) * 0.5f;
+        const QVector3D extents = (maximum - minimum) * 0.5f;
+        const float centerDepth = QVector3D::dotProduct(
+                center - cameraPosition, forward);
+        const float radius = std::fabs(forward.x()) * extents.x() +
+                std::fabs(forward.y()) * extents.y() +
+                std::fabs(forward.z()) * extents.z();
+        const float maximumDepth = centerDepth + radius;
+        if (!std::isfinite(maximumDepth) || maximumDepth <= 0.0f) {
+            continue;
+        }
+        farthestDepth = std::max(farthestDepth, maximumDepth);
+        const float minimumDepth = centerDepth - radius;
+        if (minimumDepth > 0.0f) {
+            nearestDepth = std::min(nearestDepth, minimumDepth);
+        }
+    }
+
+    if (farthestDepth <= 0.0f) {
+        return {0.05f, 100.0f};
+    }
+    const float distance = std::max(0.0f, cameraDistance);
+    const float margin = std::max(
+            {5.0f, distance * 0.05f, farthestDepth * 0.02f});
+    const float farPlane = std::max(25.0f, farthestDepth + margin);
+    // Free cameras can sit very close to walls or the vehicle. Do not derive
+    // their near plane from a stale orbital focus distance. Orbit and car
+    // cameras must retain their distance-derived near plane even when a broad
+    // batch bounds box crosses the camera, otherwise one nearby batch can
+    // collapse the depth precision for the whole scene.
+    float nearPlane = distance > 0.0f
+            ? std::clamp(distance * 0.003f, 0.05f, 1.0f)
+            : 0.05f;
+    if (distance <= 0.0f && std::isfinite(nearestDepth)) {
+        nearPlane = std::min(nearPlane,
+                             std::max(0.02f, nearestDepth * 0.25f));
+    }
+    nearPlane = std::max(nearPlane, farPlane / 50000.0f);
+    nearPlane = std::clamp(nearPlane, 0.02f, farPlane * 0.25f);
+    return {nearPlane, farPlane};
+}
+
 bool IsDefaultVisualPurpose(PhysicsSandboxScenePurpose purpose) {
     switch (purpose) {
     case PhysicsSandboxScenePurpose::Environment:
@@ -1196,6 +1279,18 @@ StaticVisualBatchResult BuildStaticVisualBatches(
             scene.meshes.size());
 
     std::map<BatchKey, BatchAccumulator> accumulators;
+    std::map<DuplicateInstanceKey, bool> duplicateCastsShadows;
+    for (const PhysicsSandboxRenderInstance &instance : scene.instances) {
+        if (!instance.visible || instance.lodLevel != 0u ||
+            instance.meshIndex >= scene.meshes.size() ||
+            instance.materialIndex >= scene.materials.size() ||
+            instance.renderLayer == PhysicsSandboxRenderLayer::Background) {
+            continue;
+        }
+        bool &castsShadows =
+                duplicateCastsShadows[DuplicateKey(instance)];
+        castsShadows = castsShadows || instance.castsShadows;
+    }
     std::set<DuplicateInstanceKey> seenInstances;
     bool hasDefaultBounds = false;
     for (const PhysicsSandboxRenderInstance &instance : scene.instances) {
@@ -1259,7 +1354,8 @@ StaticVisualBatchResult BuildStaticVisualBatches(
                 instance.purpose, instance.provenance.blockName);
         const BatchKey key = MakeBatchKey(
                 instance.materialIndex, materialClass, materialState,
-                instance.purpose, mesh.hasVertexColors, defaultVisible,
+                instance.purpose, mesh.hasVertexColors,
+                duplicateCastsShadows[DuplicateKey(instance)], defaultVisible,
                 spatialCell.has_value(),
                 spatialCell.has_value() ? spatialCell->x : 0,
                 spatialCell.has_value() ? spatialCell->z : 0);
@@ -1316,6 +1412,7 @@ StaticVisualBatchResult BuildStaticVisualBatches(
         batch.purpose = key.purpose;
         batch.hasVertexColors = key.vertexColors;
         batch.doubleSided = key.doubleSided;
+        batch.castsShadows = key.castsShadows;
         batch.defaultVisible = key.defaultVisible;
         batch.spatiallyPartitioned = key.spatiallyPartitioned;
         batch.cellX = key.cellX;

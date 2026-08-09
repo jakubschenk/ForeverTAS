@@ -14,5 +14,5 @@ void MAIN()
     // The mesh already sits slightly above the contact surface. This tiny
     // clip-space bias keeps coplanar authored map triangles from flickering
     // without making the marks visibly float at long camera distances.
-    POSITION.z -= 0.000005 * POSITION.w;
+    POSITION.z -= 0.00002 * POSITION.w;
 }

@@ -131,6 +131,21 @@ void PrintState(const PhysicsSandboxStateView &state,
                     number(position.x), number(position.y),
                     number(position.z));
     }
+    std::fputs("],\"wheelContactPoint\":[", stdout);
+    for (std::size_t wheel = 0u;
+         wheel < state.car.wheelContactPoint.size(); ++wheel) {
+        const auto &position = state.car.wheelContactPoint[wheel];
+        std::printf("%s[%.17g,%.17g,%.17g]", wheel == 0u ? "" : ",",
+                    number(position.x), number(position.y),
+                    number(position.z));
+    }
+    std::fputs("],\"wheelContactNormal\":[", stdout);
+    for (std::size_t wheel = 0u;
+         wheel < state.car.wheelContactNormal.size(); ++wheel) {
+        const auto &normal = state.car.wheelContactNormal[wheel];
+        std::printf("%s[%.17g,%.17g,%.17g]", wheel == 0u ? "" : ",",
+                    number(normal.x), number(normal.y), number(normal.z));
+    }
     std::fputs("],\"wheelContact\":[", stdout);
     for (std::size_t wheel = 0u; wheel < state.car.wheelContact.size();
          ++wheel) {

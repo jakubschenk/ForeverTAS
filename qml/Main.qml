@@ -31,6 +31,18 @@ ApplicationWindow {
     readonly property bool worldShadows: graphicsSettings
                                          ? graphicsSettings.worldShadows
                                          : false
+    readonly property bool vehicleContactShadows: !graphicsSettings
+                                                   || graphicsSettings
+                                                         .vehicleContactShadows
+    readonly property bool shadowSurfaceMode:
+        renderMode === "textured" || renderMode === "neutral"
+    readonly property bool fullWorldShadowsActive:
+        shadowSurfaceMode && !authoredLighting && worldShadows
+    readonly property bool vehicleContactShadowsActive:
+        shadowSurfaceMode && authoredLighting && vehicleContactShadows
+        && viewer.loaded && viewer.runCount > 0
+    readonly property bool sceneShadowsActive:
+        fullWorldShadowsActive || vehicleContactShadowsActive
     readonly property bool skidmarksEnabled: !graphicsSettings
                                               || graphicsSettings
                                                     .skidmarksEnabled
@@ -2167,9 +2179,11 @@ ApplicationWindow {
                             antialiasingMode: window.msaaSamples === 0
                                                   ? SceneEnvironment.NoAA
                                                   : SceneEnvironment.MSAA
-                            antialiasingQuality: window.msaaSamples >= 4
-                                                     ? SceneEnvironment.High
-                                                     : SceneEnvironment.Medium
+                            antialiasingQuality: window.msaaSamples >= 8
+                                                     ? SceneEnvironment.VeryHigh
+                                                     : window.msaaSamples >= 4
+                                                       ? SceneEnvironment.High
+                                                       : SceneEnvironment.Medium
                             // Linear tonemapping performs the required linear
                             // to sRGB conversion without the low-contrast film
                             // curve that washes out authored stadium colors.
@@ -2213,10 +2227,12 @@ ApplicationWindow {
                                                 .minus(window.viewer
                                                        .carCameraTarget)
                                                 .length()
-                                        : viewport.orbitDistance
+                                        : viewport.freeCamera
+                                          ? 0 : viewport.orbitDistance
                                     readonly property var dynamicClipPlanes:
                                         window.viewer.cameraClipPlanes(
                                             viewport.sceneCameraPosition,
+                                            viewport.cameraForward,
                                             clipDistance)
 
                                     z: viewport.carCameraActive
@@ -2240,8 +2256,29 @@ ApplicationWindow {
                             brightness: window.authoredLighting ? 0.55 : 1.15
                             color: "#fff3d7"
                             visible: true
-                            castsShadow: !window.authoredLighting
-                                         && window.worldShadows
+                            castsShadow: window.sceneShadowsActive
+                            shadowMapQuality: Light.ShadowMapQualityHigh
+                            shadowMapFar: window.fullWorldShadowsActive
+                                          ? Math.max(
+                                                400,
+                                                Math.min(
+                                                    viewCamera.clipFar,
+                                                    1200))
+                                          : Math.max(
+                                                96,
+                                                Math.min(
+                                                    viewCamera.clipFar,
+                                                    Math.min(
+                                                        1200,
+                                                        viewCamera.clipDistance
+                                                            * 1.35 + 48)))
+                            shadowBias: 0.03
+                            shadowFactor: 64
+                            softShadowQuality: Light.PCF8
+                            pcfFactor: 1.5
+                            csmNumSplits: 1
+                            csmSplit1: 0.45
+                            csmBlendRatio: 0.08
                         }
 
                         DirectionalLight {
@@ -2272,6 +2309,14 @@ ApplicationWindow {
                                         && modelData.materialClass !== "Grass"
                                         && modelData.materialClass !== "Dirt"
                                         && modelData.materialClass !== "Asphalt"
+                                        && modelData.materialClass !== "Turbo"
+                                        && modelData.materialClass !== "Signage"
+                                        && modelData.materialClass !==
+                                           "Checkpoint"
+                                        && modelData.materialClass !==
+                                           "Start / finish"
+                                        && modelData.materialClass !==
+                                           "Emissive"
                                     source: modelData.baseTexture
                                     tilingModeHorizontal: modelData.repeat
                                                           ? Texture.Repeat
@@ -2283,9 +2328,12 @@ ApplicationWindow {
                                     autoOrientation: false
                                     generateMipmaps:
                                         modelData.albedoGenerateMipmaps
-                                    minFilter: sharpDetailFiltering
-                                               ? Texture.Nearest
-                                               : Texture.Linear
+                                    // Even the sharp profile needs linear
+                                    // minification. Nearest sampling pixelates
+                                    // turbo arrows and shimmers as the camera
+                                    // moves; sharpness comes from selecting the
+                                    // base mip, not point sampling it.
+                                    minFilter: Texture.Linear
                                     magFilter: Texture.Linear
                                     mipFilter: sharpDetailFiltering
                                                ? Texture.None
@@ -2589,15 +2637,21 @@ ApplicationWindow {
                                          && modelData.defaultVisible
                                          && modelData.materialVisible
                                 geometry: modelData.geometry
-                                castsShadows: !window.authoredLighting
-                                              && window.worldShadows
+                                castsShadows: window.fullWorldShadowsActive
+                                              && modelData.castsShadows
                                               && modelData.alphaMode !==
                                                  "blended"
                                               && modelData.alphaMode !==
                                                  "additive"
                                               && modelData.alphaMode !==
                                                  "subtractive"
-                                receivesShadows: !window.authoredLighting
+                                receivesShadows: window.sceneShadowsActive
+                                                 && modelData.alphaMode !==
+                                                    "blended"
+                                                 && modelData.alphaMode !==
+                                                    "additive"
+                                                 && modelData.alphaMode !==
+                                                    "subtractive"
 
                                 materials: sharedMaterial
                                            ? [sharedMaterial] : []
@@ -2632,6 +2686,8 @@ ApplicationWindow {
                             geometry: window.viewer.loaded
                                       ? window.viewer.trackFilledGeometry
                                       : null
+                            castsShadows: window.fullWorldShadowsActive
+                            receivesShadows: window.sceneShadowsActive
                             materials: DefaultMaterial {
                                 lighting: DefaultMaterial.NoLighting
                                 vertexColorsEnabled: true
@@ -2648,6 +2704,8 @@ ApplicationWindow {
                             geometry: window.viewer.loaded
                                       ? window.viewer.trackWireGeometry
                                       : null
+                            castsShadows: false
+                            receivesShadows: false
                             materials: DefaultMaterial {
                                 lighting: DefaultMaterial.NoLighting
                                 diffuseColor: "#b8d9c7"
@@ -2743,8 +2801,9 @@ ApplicationWindow {
                                             && modelData.defaultVisible
                                             && modelData.materialVisible
                                         geometry: modelData.geometry
-                                        castsShadows: !window.authoredLighting
-                                                      && window.worldShadows
+                                        castsShadows:
+                                            window.fullWorldShadowsActive
+                                                      && modelData.castsShadows
                                                       && modelData.alphaMode !==
                                                          "blended"
                                                       && modelData.alphaMode !==
@@ -2752,7 +2811,13 @@ ApplicationWindow {
                                                       && modelData.alphaMode !==
                                                          "subtractive"
                                         receivesShadows:
-                                            !window.authoredLighting
+                                            window.fullWorldShadowsActive
+                                            && modelData.alphaMode !==
+                                               "blended"
+                                            && modelData.alphaMode !==
+                                               "additive"
+                                            && modelData.alphaMode !==
+                                               "subtractive"
                                         materials: sharedMaterial
                                                    ? [sharedMaterial] : []
                                     }
@@ -2787,8 +2852,10 @@ ApplicationWindow {
                                                     window.viewer
                                                         .ellipsoidFilledGeometries
                                                         .length]
-                                            castsShadows: true
-                                            receivesShadows: true
+                                            castsShadows:
+                                                window.fullWorldShadowsActive
+                                            receivesShadows:
+                                                window.fullWorldShadowsActive
                                             materials: PrincipledMaterial {
                                                 objectName: "runCarFilledMaterial"
                                                 vertexColorsEnabled: true
@@ -2859,15 +2926,21 @@ ApplicationWindow {
                                         && modelData.defaultVisible
                                         && modelData.materialVisible
                                     geometry: modelData.geometry
-                                    castsShadows: !window.authoredLighting
-                                                  && window.worldShadows
+                                    castsShadows:
+                                        (window.vehicleContactShadowsActive
+                                         || (window.fullWorldShadowsActive
+                                             && modelData.castsShadows))
                                                   && modelData.alphaMode !==
                                                      "blended"
                                                   && modelData.alphaMode !==
                                                      "additive"
                                                   && modelData.alphaMode !==
                                                      "subtractive"
-                                    receivesShadows: !window.authoredLighting
+                                    receivesShadows:
+                                        window.fullWorldShadowsActive
+                                        && modelData.alphaMode !== "blended"
+                                        && modelData.alphaMode !== "additive"
+                                        && modelData.alphaMode !== "subtractive"
                                     materials: sharedMaterial
                                                ? [sharedMaterial] : []
                                 }
@@ -2896,8 +2969,11 @@ ApplicationWindow {
                                                    "collision")
                                         geometry: window.viewer
                                             .selectedEllipsoidFilledGeometry
-                                        castsShadows: true
-                                        receivesShadows: true
+                                        castsShadows:
+                                            window.vehicleContactShadowsActive
+                                            || window.fullWorldShadowsActive
+                                        receivesShadows:
+                                            window.fullWorldShadowsActive
                                         materials: PrincipledMaterial {
                                             vertexColorsEnabled: true
                                             baseColor: "white"
@@ -2953,8 +3029,14 @@ ApplicationWindow {
 
                         environment: SceneEnvironment {
                             backgroundMode: SceneEnvironment.Transparent
-                            antialiasingMode: SceneEnvironment.MSAA
-                            antialiasingQuality: SceneEnvironment.Medium
+                            antialiasingMode: window.msaaSamples === 0
+                                                  ? SceneEnvironment.NoAA
+                                                  : SceneEnvironment.MSAA
+                            antialiasingQuality: window.msaaSamples >= 8
+                                                     ? SceneEnvironment.VeryHigh
+                                                     : window.msaaSamples >= 4
+                                                       ? SceneEnvironment.High
+                                                       : SceneEnvironment.Medium
                         }
 
                         Node {
@@ -2978,6 +3060,7 @@ ApplicationWindow {
                                     readonly property var dynamicClipPlanes:
                                         window.viewer.cameraClipPlanes(
                                             scenePosition,
+                                            viewport.cameraForward,
                                             viewCamera.clipDistance)
 
                                     z: viewport.carCameraActive
@@ -4577,7 +4660,8 @@ ApplicationWindow {
                             options: [
                                 { "label": qsTr("Off"), "value": "0" },
                                 { "label": qsTr("2x MSAA"), "value": "2" },
-                                { "label": qsTr("4x MSAA"), "value": "4" }
+                                { "label": qsTr("4x MSAA"), "value": "4" },
+                                { "label": qsTr("8x MSAA"), "value": "8" }
                             ]
                             onSelected: value => {
                                 if (window.graphicsSettings)
@@ -4608,7 +4692,8 @@ ApplicationWindow {
                         }
 
                         SettingSwitch {
-                            label: qsTr("Dynamic world shadows")
+                            label: qsTr("Dynamic world shadows (lit mode only)")
+                            running: window.authoredLighting
                             checked: window.graphicsSettings
                                      ? window.graphicsSettings.worldShadows
                                      : false
@@ -4616,6 +4701,16 @@ ApplicationWindow {
                                 if (window.graphicsSettings)
                                     window.graphicsSettings.worldShadows =
                                         checked
+                            }
+                        }
+
+                        SettingSwitch {
+                            label: qsTr("Selected-car contact shadow")
+                            checked: window.vehicleContactShadows
+                            onToggled: checked => {
+                                if (window.graphicsSettings)
+                                    window.graphicsSettings
+                                        .vehicleContactShadows = checked
                             }
                         }
 

@@ -79,15 +79,93 @@ QVector3D UnitAxis(const QQuaternion &rotation, const QVector3D &axis,
     return result.normalized();
 }
 
+bool NormalizeFinite(QVector3D &value) {
+    if (!Finite(value) || value.lengthSquared() < 0.000001f) {
+        return false;
+    }
+    value.normalize();
+    return Finite(value);
+}
+
+QVector3D ProjectOntoPlane(const QVector3D &value,
+                           const QVector3D &normal) {
+    return value - normal * QVector3D::dotProduct(value, normal);
+}
+
+QVector3D SurfaceNormal(const SkidmarkSample &sample, std::size_t wheel) {
+    QVector3D normal = sample.wheels[wheel].contactNormal;
+    if (NormalizeFinite(normal)) {
+        return normal;
+    }
+    return UnitAxis(sample.carRotation, {0.0f, 1.0f, 0.0f},
+                    {0.0f, 1.0f, 0.0f});
+}
+
+struct ContactBasis {
+    QVector3D normal;
+    QVector3D lateral;
+    QVector3D forward;
+};
+
+ContactBasis BuildContactBasis(const SkidmarkSample &sample,
+                               std::size_t wheel) {
+    ContactBasis basis;
+    basis.normal = SurfaceNormal(sample, wheel);
+    const QVector3D carLateral = UnitAxis(
+            sample.carRotation, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
+    const QVector3D carForward = UnitAxis(
+            sample.carRotation, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f});
+
+    basis.lateral = ProjectOntoPlane(carLateral, basis.normal);
+    QVector3D projectedForward =
+            ProjectOntoPlane(carForward, basis.normal);
+    if (!NormalizeFinite(basis.lateral)) {
+        basis.lateral =
+                QVector3D::crossProduct(basis.normal, projectedForward);
+    }
+    if (!NormalizeFinite(basis.lateral)) {
+        const QVector3D reference =
+                std::fabs(QVector3D::dotProduct(
+                                  basis.normal,
+                                  QVector3D(0.0f, 1.0f, 0.0f))) < 0.9f
+                ? QVector3D(0.0f, 1.0f, 0.0f)
+                : QVector3D(1.0f, 0.0f, 0.0f);
+        basis.lateral = QVector3D::crossProduct(basis.normal, reference);
+        NormalizeFinite(basis.lateral);
+    }
+
+    basis.forward = projectedForward -
+            basis.lateral *
+                    QVector3D::dotProduct(projectedForward, basis.lateral);
+    if (!NormalizeFinite(basis.forward)) {
+        basis.forward =
+                QVector3D::crossProduct(basis.lateral, basis.normal);
+        NormalizeFinite(basis.forward);
+    }
+    if (QVector3D::dotProduct(basis.forward, carForward) < 0.0f) {
+        basis.forward = -basis.forward;
+    }
+    return basis;
+}
+
 float TireWidth(const SkidmarkSample &sample, std::size_t wheel) {
     const std::size_t peer = wheel == 0u   ? 1u
                              : wheel == 1u ? 0u
                              : wheel == 2u ? 3u
                                            : 2u;
-    const QVector3D separation = sample.wheels[peer].groundPosition -
-                                 sample.wheels[wheel].groundPosition;
-    const float candidate =
-            Finite(separation) ? separation.length() * 0.07f : 0.11f;
+    QVector3D separation;
+    if (sample.wheels[peer].contact &&
+        Finite(sample.wheels[peer].contactPoint) &&
+        Finite(sample.wheels[wheel].contactPoint)) {
+        separation = sample.wheels[peer].contactPoint -
+                sample.wheels[wheel].contactPoint;
+        separation = ProjectOntoPlane(separation,
+                                      SurfaceNormal(sample, wheel));
+    }
+    const float candidate = Finite(separation) &&
+                    separation.lengthSquared() > 0.000001f
+            ? separation.length() * 0.07f
+            : 0.11f;
     return std::clamp(candidate, kMinimumTireWidth, kMaximumTireWidth);
 }
 
@@ -102,41 +180,39 @@ public:
                   const SurfaceStyle &style) {
         const float halfWidth = TireWidth(sample, wheel) * 0.5f;
         const float halfLength = std::max(0.045f, halfWidth * 0.75f);
-        const QVector3D lateral = UnitAxis(
-                sample.carRotation, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f});
-        const QVector3D forward = UnitAxis(
-                sample.carRotation, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f});
-        const QVector3D up = UnitAxis(sample.carRotation, {0.0f, 1.0f, 0.0f},
-                                      {0.0f, 1.0f, 0.0f});
+        const ContactBasis basis = BuildContactBasis(sample, wheel);
         const QVector3D center =
-                sample.wheels[wheel].groundPosition + up * kSurfaceOffset;
+                sample.wheels[wheel].contactPoint +
+                basis.normal * kSurfaceOffset;
         const float time = TimeSeconds(sample.timeMs);
-        AddQuad(center - lateral * halfWidth - forward * halfLength,
-                center + lateral * halfWidth - forward * halfLength,
-                center + lateral * halfWidth + forward * halfLength,
-                center - lateral * halfWidth + forward * halfLength, 0.0f, 0.5f,
-                time, time, style, style);
+        AddQuad(center - basis.lateral * halfWidth -
+                        basis.forward * halfLength,
+                center + basis.lateral * halfWidth -
+                        basis.forward * halfLength,
+                center + basis.lateral * halfWidth +
+                        basis.forward * halfLength,
+                center - basis.lateral * halfWidth +
+                        basis.forward * halfLength,
+                0.0f, 0.5f, time, time, style, style);
         ++stampCount_;
     }
 
     void AddRibbon(const SkidmarkSample &from, const SkidmarkSample &to,
                    std::size_t wheel, float uvStart, float uvEnd,
                    const SurfaceStyle &style) {
-        QVector3D fromLateral = UnitAxis(from.carRotation, {1.0f, 0.0f, 0.0f},
-                                         {1.0f, 0.0f, 0.0f});
-        QVector3D toLateral = UnitAxis(to.carRotation, {1.0f, 0.0f, 0.0f},
-                                       {1.0f, 0.0f, 0.0f});
+        const ContactBasis fromBasis = BuildContactBasis(from, wheel);
+        const ContactBasis toBasis = BuildContactBasis(to, wheel);
+        QVector3D fromLateral = fromBasis.lateral;
+        QVector3D toLateral = toBasis.lateral;
         if (QVector3D::dotProduct(fromLateral, toLateral) < 0.0f) {
             toLateral = -toLateral;
         }
-        const QVector3D fromUp = UnitAxis(from.carRotation, {0.0f, 1.0f, 0.0f},
-                                          {0.0f, 1.0f, 0.0f});
-        const QVector3D toUp = UnitAxis(to.carRotation, {0.0f, 1.0f, 0.0f},
-                                        {0.0f, 1.0f, 0.0f});
         const QVector3D start =
-                from.wheels[wheel].groundPosition + fromUp * kSurfaceOffset;
+                from.wheels[wheel].contactPoint +
+                fromBasis.normal * kSurfaceOffset;
         const QVector3D end =
-                to.wheels[wheel].groundPosition + toUp * kSurfaceOffset;
+                to.wheels[wheel].contactPoint +
+                toBasis.normal * kSurfaceOffset;
         const float fromHalfWidth = TireWidth(from, wheel) * 0.5f;
         const float toHalfWidth = TireWidth(to, wheel) * 0.5f;
         AddQuad(start - fromLateral * fromHalfWidth,
@@ -226,7 +302,7 @@ private:
 
 bool Active(const SkidmarkSample &sample, std::size_t wheel) {
     const SkidmarkWheelSample &value = sample.wheels[wheel];
-    return value.contact && value.sliding && Finite(value.groundPosition) &&
+    return value.contact && value.sliding && Finite(value.contactPoint) &&
            StyleForSurface(value.surface).has_value();
 }
 
@@ -242,7 +318,7 @@ bool Continuous(const SkidmarkSample &from, const SkidmarkSample &to,
         return false;
     }
     const QVector3D delta =
-            to.wheels[wheel].groundPosition - from.wheels[wheel].groundPosition;
+            to.wheels[wheel].contactPoint - from.wheels[wheel].contactPoint;
     const float maximumDistance =
             std::max(10.0f, static_cast<float>(elapsedMs) * 1.0f);
     if (delta.lengthSquared() > maximumDistance * maximumDistance) {
@@ -277,8 +353,8 @@ SkidmarkMeshData BuildSkidmarkMesh(const std::vector<SkidmarkSample> &samples) {
                 continue;
             }
             const QVector3D delta =
-                    current.wheels[wheel].groundPosition -
-                    samples[sampleIndex - 1u].wheels[wheel].groundPosition;
+                    current.wheels[wheel].contactPoint -
+                    samples[sampleIndex - 1u].wheels[wheel].contactPoint;
             const float distanceSquared = delta.lengthSquared();
             if (distanceSquared < kMinimumSegmentLengthSquared) {
                 continue;

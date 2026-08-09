@@ -12,6 +12,8 @@ constexpr char kLightingModeKey[] = "graphics/lightingMode";
 constexpr char kMsaaSamplesKey[] = "graphics/msaaSamples";
 constexpr char kTextureFilteringKey[] = "graphics/textureFiltering";
 constexpr char kWorldShadowsKey[] = "graphics/worldShadows";
+constexpr char kVehicleContactShadowsKey[] =
+        "graphics/vehicleContactShadows";
 
 constexpr char kSkidmarksEnabledKey[] = "graphics/skidmarksEnabled";
 
@@ -20,6 +22,7 @@ constexpr char kDefaultLightingMode[] = "authored";
 constexpr char kDefaultTextureFiltering[] = "trilinear";
 constexpr int kDefaultMsaaSamples = 2;
 constexpr bool kDefaultWorldShadows = false;
+constexpr bool kDefaultVehicleContactShadows = true;
 constexpr bool kDefaultSkidmarksEnabled = true;
 constexpr char kRenderModeMigrationValue[] = "textured-rt";
 constexpr char kRenderModeNeutral[] = "neutral";
@@ -55,7 +58,7 @@ bool IsTextureFiltering(const QString &value) {
 }
 
 bool IsMsaaSamples(int value) {
-    return value == 0 || value == 2 || value == 4;
+    return value == 0 || value == 2 || value == 4 || value == 8;
 }
 
 }  // namespace
@@ -87,6 +90,10 @@ QString GraphicsSettings::textureFiltering() const {
 
 bool GraphicsSettings::worldShadows() const {
     return worldShadows_;
+}
+
+bool GraphicsSettings::vehicleContactShadows() const {
+    return vehicleContactShadows_;
 }
 
 bool GraphicsSettings::skidmarksEnabled() const {
@@ -156,6 +163,16 @@ void GraphicsSettings::setWorldShadows(bool value) {
     worldShadows_ = value;
     emit worldShadowsChanged();
     Persist(QString::fromLatin1(kWorldShadowsKey), worldShadows_);
+}
+
+void GraphicsSettings::setVehicleContactShadows(bool value) {
+    if (value == vehicleContactShadows_) {
+        return;
+    }
+    vehicleContactShadows_ = value;
+    emit vehicleContactShadowsChanged();
+    Persist(QString::fromLatin1(kVehicleContactShadowsKey),
+            vehicleContactShadows_);
 }
 
 void GraphicsSettings::setSkidmarksEnabled(bool value) {
@@ -251,6 +268,35 @@ bool GraphicsSettings::WorldShadowsFromValue(const QVariant &value,
     return kDefaultWorldShadows;
 }
 
+bool GraphicsSettings::VehicleContactShadowsFromValue(const QVariant &value,
+                                                       bool *repaired) {
+    if (value.userType() == QMetaType::Bool) {
+        *repaired = false;
+        return value.toBool();
+    }
+    bool converted = false;
+    const int integer = value.toInt(&converted);
+    if (converted && (integer == 0 || integer == 1)) {
+        *repaired = false;
+        return integer != 0;
+    }
+    if (value.userType() == QMetaType::QString) {
+        const QString text = value.toString().toLower();
+        if (text == QStringLiteral("false") || text == QStringLiteral("0") ||
+            text == QStringLiteral("no") || text == QStringLiteral("off")) {
+            *repaired = false;
+            return false;
+        }
+        if (text == QStringLiteral("true") || text == QStringLiteral("1") ||
+            text == QStringLiteral("yes") || text == QStringLiteral("on")) {
+            *repaired = false;
+            return true;
+        }
+    }
+    *repaired = true;
+    return kDefaultVehicleContactShadows;
+}
+
 bool GraphicsSettings::SkidmarksEnabledFromValue(const QVariant &value,
                                                   bool *repaired) {
     if (value.userType() == QMetaType::Bool) {
@@ -287,6 +333,7 @@ void GraphicsSettings::Load() {
     bool msaaSamplesRepaired = false;
     bool textureFilteringRepaired = false;
     bool worldShadowsRepaired = false;
+    bool vehicleContactShadowsRepaired = false;
     bool skidmarksEnabledRepaired = false;
 
     renderMode_ = RenderModeFromString(
@@ -312,6 +359,10 @@ void GraphicsSettings::Load() {
             settings.value(QString::fromLatin1(kWorldShadowsKey),
                            kDefaultWorldShadows),
             &worldShadowsRepaired);
+    vehicleContactShadows_ = VehicleContactShadowsFromValue(
+            settings.value(QString::fromLatin1(kVehicleContactShadowsKey),
+                           kDefaultVehicleContactShadows),
+            &vehicleContactShadowsRepaired);
     skidmarksEnabled_ = SkidmarksEnabledFromValue(
             settings.value(QString::fromLatin1(kSkidmarksEnabledKey),
                            kDefaultSkidmarksEnabled),
@@ -319,7 +370,8 @@ void GraphicsSettings::Load() {
 
     const bool repaired = renderModeRepaired || lightingModeRepaired ||
             msaaSamplesRepaired || textureFilteringRepaired ||
-            worldShadowsRepaired || skidmarksEnabledRepaired;
+            worldShadowsRepaired || vehicleContactShadowsRepaired ||
+            skidmarksEnabledRepaired;
     if (repaired) {
         Persist();
     }
@@ -331,6 +383,8 @@ void GraphicsSettings::Persist() const {
     Persist(QString::fromLatin1(kMsaaSamplesKey), msaaSamples_);
     Persist(QString::fromLatin1(kTextureFilteringKey), textureFiltering_);
     Persist(QString::fromLatin1(kWorldShadowsKey), worldShadows_);
+    Persist(QString::fromLatin1(kVehicleContactShadowsKey),
+            vehicleContactShadows_);
     Persist(QString::fromLatin1(kSkidmarksEnabledKey), skidmarksEnabled_);
 }
 

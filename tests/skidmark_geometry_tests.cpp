@@ -36,10 +36,10 @@ SkidmarkSample MakeSample(std::int64_t timeMs, float travel,
     SkidmarkSample sample;
     sample.timeMs = timeMs;
     sample.carRotation = QQuaternion(1.0f, 0.0f, 0.0f, 0.0f);
-    sample.wheels[0u].groundPosition = {-0.75f, 0.0f, travel + 1.2f};
-    sample.wheels[1u].groundPosition = {0.75f, 0.0f, travel + 1.2f};
-    sample.wheels[2u].groundPosition = {0.75f, 0.0f, travel - 1.2f};
-    sample.wheels[3u].groundPosition = {-0.75f, 0.0f, travel - 1.2f};
+    sample.wheels[0u].contactPoint = {-0.75f, 0.0f, travel + 1.2f};
+    sample.wheels[1u].contactPoint = {0.75f, 0.0f, travel + 1.2f};
+    sample.wheels[2u].contactPoint = {0.75f, 0.0f, travel - 1.2f};
+    sample.wheels[3u].contactPoint = {-0.75f, 0.0f, travel - 1.2f};
     for (auto &wheel : sample.wheels) {
         wheel.surface = surface;
     }
@@ -71,6 +71,10 @@ std::vector<SkidmarkVertexData> DecodeVertices(const QByteArray &bytes) {
                     static_cast<std::size_t>(bytes.size()));
     }
     return result;
+}
+
+QVector3D Position(const SkidmarkVertexData &vertex) {
+    return {vertex.positionX, vertex.positionY, vertex.positionZ};
 }
 
 bool TestContinuousRearWheelRibbons() {
@@ -183,10 +187,107 @@ bool TestSurfacePolicyAndInvalidSamples() {
 
     SkidmarkSample invalid = MakeSample(0, 0.0f);
     ActivateOneWheel(invalid);
-    invalid.wheels[2u].groundPosition.setX(
+    invalid.wheels[2u].contactPoint.setX(
             std::numeric_limits<float>::quiet_NaN());
     okay &= Check(BuildSkidmarkMesh({invalid}).empty(),
                   "non-finite contact position retained a skidmark");
+    return okay;
+}
+
+bool TestContactPlaneProjectionAndNormalFallback() {
+    SkidmarkSample banked = MakeSample(0, 0.0f);
+    ActivateOneWheel(banked);
+    const QVector3D bankedNormal =
+            QVector3D(0.0f, 1.0f, 1.0f).normalized();
+    banked.wheels[2u].contactNormal = bankedNormal;
+    const QVector3D bankedPoint = banked.wheels[2u].contactPoint;
+    const std::vector<SkidmarkVertexData> bankedVertices =
+            DecodeVertices(BuildSkidmarkMesh({banked}).vertices);
+    bool okay = Check(bankedVertices.size() == 4u,
+                      "banked skidmark stamp had an unexpected vertex count");
+    if (bankedVertices.size() == 4u) {
+        for (const SkidmarkVertexData &vertex : bankedVertices) {
+            okay &= Check(
+                    Close(QVector3D::dotProduct(Position(vertex) - bankedPoint,
+                                               bankedNormal),
+                          0.012f),
+                    "banked skidmark was not offset along the contact normal");
+        }
+        okay &= Check(
+                Close(QVector3D::dotProduct(
+                              Position(bankedVertices[1u]) -
+                                      Position(bankedVertices[0u]),
+                              bankedNormal),
+                      0.0f) &&
+                        Close(QVector3D::dotProduct(
+                                      Position(bankedVertices[3u]) -
+                                              Position(bankedVertices[0u]),
+                                      bankedNormal),
+                              0.0f),
+                "banked skidmark axes were not projected onto the contact "
+                "plane");
+    }
+
+    SkidmarkSample bankedNext = banked;
+    bankedNext.timeMs = 10;
+    const QVector3D bankedTravel =
+            QVector3D(0.0f, -1.0f, 1.0f).normalized() * 0.5f;
+    bankedNext.wheels[2u].contactPoint += bankedTravel;
+    const std::vector<SkidmarkVertexData> bankedRibbonVertices =
+            DecodeVertices(BuildSkidmarkMesh({banked, bankedNext}).vertices);
+    okay &= Check(bankedRibbonVertices.size() == 8u,
+                  "banked skidmark ribbon had an unexpected vertex count");
+    if (bankedRibbonVertices.size() == 8u) {
+        for (std::size_t vertex = 4u; vertex < 6u; ++vertex) {
+            okay &= Check(
+                    Close(QVector3D::dotProduct(
+                                  Position(bankedRibbonVertices[vertex]) -
+                                          bankedPoint,
+                                  bankedNormal),
+                          0.012f),
+                    "banked ribbon start was not offset along its contact "
+                    "normal");
+        }
+        for (std::size_t vertex = 6u; vertex < 8u; ++vertex) {
+            okay &= Check(
+                    Close(QVector3D::dotProduct(
+                                  Position(bankedRibbonVertices[vertex]) -
+                                          bankedNext.wheels[2u].contactPoint,
+                                  bankedNormal),
+                          0.012f),
+                    "banked ribbon end was not offset along its contact "
+                    "normal");
+        }
+    }
+
+    SkidmarkSample fallback = MakeSample(0, 0.0f);
+    ActivateOneWheel(fallback);
+    fallback.carRotation =
+            QQuaternion::fromAxisAndAngle(0.0f, 0.0f, 1.0f, 90.0f);
+    fallback.wheels[2u].contactNormal = {
+            std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f};
+    const QVector3D fallbackPoint = fallback.wheels[2u].contactPoint;
+    const QVector3D expectedCarUp = fallback.carRotation
+                                            .rotatedVector(
+                                                    QVector3D(0.0f, 1.0f,
+                                                              0.0f))
+                                            .normalized();
+    const std::vector<SkidmarkVertexData> fallbackVertices =
+            DecodeVertices(BuildSkidmarkMesh({fallback}).vertices);
+    okay &= Check(fallbackVertices.size() == 4u,
+                  "invalid-normal skidmark stamp was not retained");
+    if (fallbackVertices.size() == 4u) {
+        QVector3D center;
+        for (const SkidmarkVertexData &vertex : fallbackVertices) {
+            center += Position(vertex);
+        }
+        center /= static_cast<float>(fallbackVertices.size());
+        const QVector3D offset = center - fallbackPoint;
+        okay &= Check(
+                Close(QVector3D::dotProduct(offset, expectedCarUp), 0.012f) &&
+                        (offset - expectedCarUp * 0.012f).length() < 0.0001f,
+                "invalid contact normal did not fall back to car up");
+    }
     return okay;
 }
 
@@ -249,6 +350,8 @@ int main(int argc, char **argv) {
            "skidmark continuity rules were incorrect");
     expect(TestSurfacePolicyAndInvalidSamples(),
            "skidmark surface policy was incorrect");
+    expect(TestContactPlaneProjectionAndNormalFallback(),
+           "skidmark contact-plane projection was incorrect");
     expect(TestGeometryMetadataAndCleanup(),
            "skidmark QQuick3D geometry was incorrect");
 

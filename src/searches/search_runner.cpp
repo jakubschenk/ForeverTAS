@@ -112,6 +112,8 @@ SearchTimelineFrame ToTimelineFrame(
             view.car.cameraSupportUp.y,
             view.car.cameraSupportUp.z,
             view.car.wheelGroundPosition,
+            view.car.wheelContactPoint,
+            view.car.wheelContactNormal,
             view.car.wheelSliding,
             view.car.wheelSurface};
 }

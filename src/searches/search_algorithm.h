@@ -84,6 +84,13 @@ struct SearchTimelineFrame {
     float cameraSupportUpY = 1.0f;
     float cameraSupportUpZ = 0.0f;
     std::array<forevervalidator::Vector3, 4> wheelGroundPosition{};
+    std::array<forevervalidator::Vector3, 4> wheelContactPoint{};
+    std::array<forevervalidator::Vector3, 4> wheelContactNormal{{
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+    }};
     std::array<bool, 4> wheelSliding{{false, false, false, false}};
     std::array<std::uint16_t, 4> wheelSurface{{0xffffu, 0xffffu,
                                                0xffffu, 0xffffu}};

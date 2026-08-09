@@ -49,10 +49,20 @@ struct CameraClipPlanes {
     float farPlane = 1000.0f;
 };
 
+struct CameraClipBounds {
+    QVector3D minimum{};
+    QVector3D maximum{};
+};
+
 CameraClipPlanes CalculateCameraClipPlanes(const QVector3D &cameraPosition,
                                            float cameraDistance,
                                            const QVector3D &boundsMin,
                                            const QVector3D &boundsMax);
+CameraClipPlanes CalculateCameraClipPlanes(
+        const QVector3D &cameraPosition,
+        const QVector3D &cameraForward,
+        float cameraDistance,
+        const std::vector<CameraClipBounds> &bounds);
 
 bool IsDefaultVisualPurpose(
         forevervalidator::experimental::PhysicsSandboxScenePurpose purpose);
@@ -74,6 +84,7 @@ struct StaticVisualBatch {
                     Environment;
     bool hasVertexColors = false;
     bool doubleSided = false;
+    bool castsShadows = true;
     bool defaultVisible = false;
     bool spatiallyPartitioned = false;
     std::int64_t cellX = 0;

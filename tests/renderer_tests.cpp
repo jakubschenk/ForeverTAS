@@ -556,6 +556,7 @@ bool TestReplacementParametersAndTextures() {
 }
 
 bool TestClipPlanesAndPurposeFiltering() {
+    using forevertas::viewer::CameraClipBounds;
     using forevertas::viewer::CalculateCameraClipPlanes;
     using forevertas::viewer::IsDefaultVisualInstance;
     using forevertas::viewer::IsDefaultVisualPurpose;
@@ -568,6 +569,22 @@ bool TestClipPlanesAndPurposeFiltering() {
     const auto enclosingSky = CalculateCameraClipPlanes(
             {0.0f, 2.0f, 3.0f}, 3.0f, {-28000.0f, -15000.0f, -28000.0f},
             {29000.0f, 15000.0f, 29000.0f});
+    const std::vector<CameraClipBounds> directionalBounds{
+            {{-10.0f, -2.0f, -100.0f}, {10.0f, 20.0f, -20.0f}},
+            {{-28000.0f, -15000.0f, 1000.0f},
+             {29000.0f, 15000.0f, 29000.0f}}};
+    const auto freeCamera = CalculateCameraClipPlanes(
+            {0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, 0.0f,
+            directionalBounds);
+    const auto reverseCamera = CalculateCameraClipPlanes(
+            {0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, 0.0f,
+            directionalBounds);
+    const std::vector<CameraClipBounds> orbitBounds{
+            {{-2.0f, -2.0f, -0.1f}, {2.0f, 4.0f, -0.01f}},
+            {{-100.0f, -20.0f, -2300.0f}, {100.0f, 100.0f, -2000.0f}}};
+    const auto normalOrbit = CalculateCameraClipPlanes(
+            {0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}, 38.0f,
+            orbitBounds);
     bool okay =
             Check(closeCamera.nearPlane >= 0.1f &&
                           closeCamera.farPlane > closeCamera.nearPlane &&
@@ -581,6 +598,18 @@ bool TestClipPlanesAndPurposeFiltering() {
                           enclosingSky.farPlane / enclosingSky.nearPlane <=
                                   50001.0f,
                   "enclosing sky bounds made close camera use unusable planes");
+    okay &= Check(freeCamera.nearPlane <= 0.051f &&
+                          freeCamera.farPlane > 100.0f &&
+                          freeCamera.farPlane < 110.0f,
+                  "free camera retained stale-distance clipping or included "
+                  "bounds behind the view");
+    okay &= Check(reverseCamera.farPlane > 29000.0f,
+                  "view-oriented clip planes did not respond to camera "
+                  "direction");
+    okay &= Check(normalOrbit.nearPlane >= 0.11f &&
+                          normalOrbit.farPlane / normalOrbit.nearPlane <=
+                                  50001.0f,
+                  "a nearby batch collapsed normal-orbit depth precision");
     okay &= Check(
             IsDefaultVisualPurpose(PhysicsSandboxScenePurpose::PlacedBlock) &&
                     IsDefaultVisualPurpose(
@@ -690,8 +719,11 @@ bool TestStaticBatching() {
     placed.worldTransform.basisY = {0.0f, 3.0f, 0.0f};
     placed.worldTransform.basisZ = {0.0f, 0.0f, 4.0f};
     placed.worldTransform.translation = {10.0f, 20.0f, 30.0f};
+    placed.castsShadows = false;
     scene.instances.push_back(placed);
-    scene.instances.push_back(placed);
+    PhysicsSandboxRenderInstance casterDuplicate = placed;
+    casterDuplicate.castsShadows = true;
+    scene.instances.push_back(casterDuplicate);
 
     PhysicsSandboxRenderInstance clip = placed;
     clip.meshIndex = 1u;
@@ -737,6 +769,9 @@ bool TestStaticBatching() {
 
     const auto result = forevertas::viewer::BuildStaticVisualBatches(scene);
     const auto repeat = forevertas::viewer::BuildStaticVisualBatches(scene);
+    std::swap(scene.instances[0u], scene.instances[1u]);
+    const auto reversedDuplicateOrder =
+            forevertas::viewer::BuildStaticVisualBatches(scene);
     bool okay = Check(
             result.visibleSourceInstanceCount == 7u &&
                     result.defaultVisibleInstanceCount == 4u &&
@@ -756,6 +791,16 @@ bool TestStaticBatching() {
             });
     okay &= Check(turboBatch != result.batches.cend(),
                   "turbo geometry did not reach a turbo batch");
+    const auto reversedTurboBatch = std::find_if(
+            reversedDuplicateOrder.batches.cbegin(),
+            reversedDuplicateOrder.batches.cend(),
+            [](const StaticVisualBatch &batch) {
+                return batch.materialClass == ReplacementMaterialClass::Turbo;
+            });
+    okay &= Check(reversedTurboBatch !=
+                                  reversedDuplicateOrder.batches.cend() &&
+                          reversedTurboBatch->castsShadows,
+                  "duplicate shadow-caster OR depended on instance order");
     const auto grassClipBatch = std::find_if(
             result.batches.cbegin(), result.batches.cend(),
             [](const StaticVisualBatch &batch) {
@@ -839,6 +884,7 @@ bool TestStaticBatching() {
                 turboBatch->vertices.constData());
         okay &= Check(
                 turboBatch->sourceInstanceCount == 1u &&
+                        turboBatch->castsShadows &&
                         turboBatch->triangleCount == 1u &&
                         turboBatch->indices.size() ==
                                 static_cast<qsizetype>(3u *
