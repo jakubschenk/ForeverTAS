@@ -15,7 +15,8 @@
 namespace forevertas::viewer {
 
 struct SkidmarkWheelSample {
-    QVector3D groundPosition{};
+    QVector3D contactPoint{};
+    QVector3D contactNormal{0.0f, 1.0f, 0.0f};
     bool contact = false;
     bool sliding = false;
     std::uint16_t surface = 0xffffu;

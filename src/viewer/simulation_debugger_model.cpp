@@ -987,6 +987,14 @@ SimulationDebuggerModel::processDebuggerOutput(const QString &output,
                     JsonArrayValues(state.value(
                             QStringLiteral("wheelGroundPosition"))));
             frame.insert(
+                    QStringLiteral("wheelContactPoint"),
+                    JsonArrayValues(state.value(
+                            QStringLiteral("wheelContactPoint"))));
+            frame.insert(
+                    QStringLiteral("wheelContactNormal"),
+                    JsonArrayValues(state.value(
+                            QStringLiteral("wheelContactNormal"))));
+            frame.insert(
                     QStringLiteral("wheelContact"),
                     JsonArrayValues(
                             state.value(QStringLiteral("wheelContact"))));

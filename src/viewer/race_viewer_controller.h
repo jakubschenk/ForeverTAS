@@ -5,6 +5,7 @@
 #include "searches/search_algorithm.h"
 #include "viewer/race_geometry.h"
 #include "viewer/skidmark_geometry.h"
+#include "viewer/trajectory_geometry.h"
 #include "viewer/simulation_debugger_model.h"
 #include "viewer/whiteboard_model.h"
 #include "viewer/ray_tracing_scene.h"
@@ -61,6 +62,13 @@ struct RaceViewerFrame {
     std::array<bool, 4> wheelHasSurface{{true, true, true, true}};
     QVector3D cameraSupportUp{0.0f, 1.0f, 0.0f};
     std::array<QVector3D, 4> wheelGroundPosition{};
+    std::array<QVector3D, 4> wheelContactPoint{};
+    std::array<QVector3D, 4> wheelContactNormal{{
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+    }};
     std::array<bool, 4> wheelSliding{{false, false, false, false}};
     std::array<std::uint16_t, 4> wheelSurface{{0xffffu, 0xffffu,
                                                0xffffu, 0xffffu}};
@@ -115,6 +123,7 @@ struct RaceViewerLoadResult {
     QVariantMap renderTelemetry;
     QVector3D visualBoundsMin{};
     QVector3D visualBoundsMax{};
+    std::vector<CameraClipBounds> cameraClipBounds;
     QVariantList carEllipsoids;
     std::int64_t triangleCount = 0;
     std::int64_t visualTriangleCount = 0;
@@ -133,7 +142,7 @@ struct RaceViewerInputPreviewResult {
     std::shared_ptr<ManualDriveRuntime> runtime;
     std::vector<RaceViewerFrame> frames;
     std::vector<SandboxInputEvent> inputs;
-    RaceViewerMeshBuffers mesh;
+    TrajectoryMeshData mesh;
     bool canceled = false;
 };
 
@@ -401,6 +410,10 @@ public slots:
                             const QString &backendId);
     Q_INVOKABLE QVector2D cameraClipPlanes(const QVector3D &cameraPosition,
                                            double cameraDistance) const;
+    Q_INVOKABLE QVector2D cameraClipPlanes(
+            const QVector3D &cameraPosition,
+            const QVector3D &cameraForward,
+            double cameraDistance) const;
     Q_INVOKABLE QString renderTelemetry(
             const QString &script,
             const QVector3D &cameraPosition) const;
@@ -566,6 +579,7 @@ private:
     double sceneRadius_ = 1.0;
     QVector3D sceneBoundsMin_{};
     QVector3D sceneBoundsMax_{};
+    std::vector<CameraClipBounds> cameraClipBounds_;
     qint64 playbackStartTick_ = 0;
     qint64 manualDriveStartTick_ = 0;
     bool loaded_ = false;

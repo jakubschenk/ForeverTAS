@@ -68,7 +68,7 @@ set(FOREVERVALIDATOR_ENABLE_CUDA ${FOREVERTAS_ENABLE_CUDA} CACHE BOOL
 FetchContent_Declare(
     ForeverValidator
     GIT_REPOSITORY https://github.com/jakubschenk/ForeverValidator.git
-    GIT_TAG 3dca7ffa15f57696bc97d18816d036828ec9a6a9
+    GIT_TAG 4b645a4c4351b813b06e98ae12c859125e60dcca
     GIT_SHALLOW FALSE)
 FetchContent_MakeAvailable(ForeverValidator)
 
@@ -157,6 +157,8 @@ add_library(forevertas_gui STATIC
     src/viewer/race_geometry.h
     src/viewer/skidmark_geometry.cpp
     src/viewer/skidmark_geometry.h
+    src/viewer/trajectory_geometry.cpp
+    src/viewer/trajectory_geometry.h
     src/viewer/ray_tracing_scene.cpp
     src/viewer/ray_tracing_scene.h
     src/viewer/race_timeline_item.cpp
@@ -686,6 +688,13 @@ if(BUILD_TESTING)
         Qt6::Gui
         Qt6::Quick3D)
 
+    add_executable(forevertas-trajectory-geometry-tests
+        tests/trajectory_geometry_tests.cpp)
+    target_link_libraries(forevertas-trajectory-geometry-tests PRIVATE
+        forevertas_gui
+        Qt6::Gui
+        Qt6::Quick3D)
+
     add_executable(forevertas-skidmark-shader-smoke
         tests/skidmark_shader_smoke.cpp)
     target_compile_definitions(forevertas-skidmark-shader-smoke PRIVATE
@@ -735,6 +744,8 @@ if(BUILD_TESTING)
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-skidmark-geometry-tests PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
+        target_compile_options(forevertas-trajectory-geometry-tests PRIVATE
+            ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-skidmark-shader-smoke PRIVATE
             ${FOREVERTAS_WARNING_OPTIONS})
         target_compile_options(forevertas-native-material-texture-tests PRIVATE
@@ -767,6 +778,8 @@ if(BUILD_TESTING)
              COMMAND forevertas-graphics-settings-tests)
     add_test(NAME forevertas-skidmark-geometry
              COMMAND forevertas-skidmark-geometry-tests)
+    add_test(NAME forevertas-trajectory-geometry
+             COMMAND forevertas-trajectory-geometry-tests)
     if(WIN32)
         add_test(NAME forevertas-skidmark-shader
                  COMMAND forevertas-skidmark-shader-smoke)
@@ -780,6 +793,8 @@ if(BUILD_TESTING)
     set_tests_properties(forevertas-renderer PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(forevertas-skidmark-geometry PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(forevertas-trajectory-geometry PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set_tests_properties(forevertas-whiteboard PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -922,6 +937,65 @@ if(BUILD_TESTING)
                 LABELS "renderer;d3d11;fixture"
                 RUN_SERIAL TRUE
                 TIMEOUT 180)
+
+            add_test(NAME forevertas-renderer-capture-collision-d3d11
+                     COMMAND forevertas-renderer-capture
+                         --packs "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                         --replay "${FOREVERTAS_TEST_REPLAY}"
+                         --output
+                             "${CMAKE_CURRENT_BINARY_DIR}/renderer-capture-collision.png"
+                         --mode collision
+                         --msaa 0
+                         --tick-fraction 0.5
+                         --size 640x360)
+            set_tests_properties(
+                forevertas-renderer-capture-collision-d3d11 PROPERTIES
+                ENVIRONMENT
+                    "QT_SCALE_FACTOR=1;QT_ENABLE_HIGHDPI_SCALING=0"
+                LABELS "renderer;d3d11;fixture;collision"
+                RUN_SERIAL TRUE
+                TIMEOUT 180)
+
+            add_test(NAME forevertas-renderer-capture-world-shadows-d3d11
+                     COMMAND forevertas-renderer-capture
+                         --packs "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                         --replay "${FOREVERTAS_TEST_REPLAY}"
+                         --output
+                             "${CMAKE_CURRENT_BINARY_DIR}/renderer-capture-world-shadows.png"
+                         --mode textured
+                         --lighting lit
+                         --world-shadows
+                         --msaa 0
+                         --tick-fraction 0.5
+                         --size 960x540)
+            set_tests_properties(
+                forevertas-renderer-capture-world-shadows-d3d11 PROPERTIES
+                ENVIRONMENT
+                    "QT_SCALE_FACTOR=1;QT_ENABLE_HIGHDPI_SCALING=0"
+                LABELS "renderer;d3d11;fixture;shadows"
+                RUN_SERIAL TRUE
+                TIMEOUT 240)
+
+            add_test(NAME forevertas-renderer-capture-trajectory-d3d11
+                     COMMAND forevertas-renderer-capture
+                         --packs "${FOREVERTAS_TEST_PACK_DIRECTORY}"
+                         --replay "${FOREVERTAS_TEST_REPLAY}"
+                         --output
+                             "${CMAKE_CURRENT_BINARY_DIR}/renderer-capture-trajectory.png"
+                         --mode textured
+                         --disable-contact-shadows
+                         --replay-inputs
+                         --show-trajectories
+                         --msaa 0
+                         --tick-fraction 0.5
+                         --size 960x540)
+            set_tests_properties(
+                forevertas-renderer-capture-trajectory-d3d11 PROPERTIES
+                ENVIRONMENT
+                    "QT_SCALE_FACTOR=1;QT_ENABLE_HIGHDPI_SCALING=0"
+                LABELS "renderer;d3d11;fixture;trajectory"
+                RUN_SERIAL TRUE
+                TIMEOUT 240)
         endif()
 
         add_executable(forevertas-viewer-reload-smoke

@@ -77,6 +77,16 @@ bool SameVector(const forevervalidator::Vector3 &left,
     return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
+template <std::size_t Size>
+bool SameVectors(
+        const std::array<forevervalidator::Vector3, Size> &left,
+        const std::array<forevervalidator::Vector3, Size> &right) {
+    for (std::size_t index = 0u; index < Size; ++index) {
+        if (!SameVector(left[index], right[index])) return false;
+    }
+    return true;
+}
+
 bool SameCarState(
         const forevervalidator::experimental::PhysicsSandboxCarState &left,
         const forevervalidator::experimental::PhysicsSandboxCarState &right) {
@@ -88,7 +98,32 @@ bool SameCarState(
             SameVector(left.linearSpeed, right.linearSpeed) &&
             SameVector(left.angularSpeed, right.angularSpeed) &&
             SameVector(left.force, right.force) &&
-            SameVector(left.torque, right.torque);
+            SameVector(left.torque, right.torque) &&
+            left.signedSpeed == right.signedSpeed &&
+            left.turbo == right.turbo &&
+            left.cameraFlightTransition == right.cameraFlightTransition &&
+            left.burning == right.burning &&
+            left.gearChanged == right.gearChanged &&
+            left.wheelContact == right.wheelContact &&
+            left.wheelHasSurface == right.wheelHasSurface &&
+            SameVectors(left.wheelGroundPosition,
+                        right.wheelGroundPosition) &&
+            SameVector(left.cameraSupportUp, right.cameraSupportUp) &&
+            SameVector(left.localSpeed, right.localSpeed) &&
+            left.freeWheeling == right.freeWheeling &&
+            left.lateralContact == right.lateralContact &&
+            left.sliding == right.sliding &&
+            left.gear == right.gear &&
+            left.rpm == right.rpm &&
+            left.turningRate == right.turningRate &&
+            left.turboType == right.turboType &&
+            left.turboBoostFactor == right.turboBoostFactor &&
+            left.wheelSliding == right.wheelSliding &&
+            left.wheelSurface == right.wheelSurface &&
+            SameVectors(left.wheelContactPoint,
+                        right.wheelContactPoint) &&
+            SameVectors(left.wheelContactNormal,
+                        right.wheelContactNormal);
 }
 
 bool SameStateView(

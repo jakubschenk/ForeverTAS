@@ -6,6 +6,7 @@
 #include "time_format.h"
 #include "viewer/material_classifier.h"
 #include "viewer/native_material_loader.h"
+#include "viewer/trajectory_geometry.h"
 
 #include <forevervalidator/camera.h>
 #include <forevervalidator/experimental/physics_sandbox.h>
@@ -998,92 +999,17 @@ RaceViewerMeshBuffers BuildMeshBuffers(
     return result;
 }
 
-RaceViewerMeshBuffers BuildTrajectoryMesh(
+TrajectoryMeshData BuildTrajectoryMesh(
         const std::vector<RaceViewerFrame> &frames,
         float radius) {
-    std::vector<ViewerTriangle> triangles;
-    if (frames.empty()) {
-        return {};
-    }
-    if (frames.size() - 1u > triangles.max_size() / 12u) {
-        throw std::length_error("trajectory geometry is too large");
-    }
-    triangles.reserve(std::max<std::size_t>(1u, frames.size() - 1u) * 12u);
-    const auto addQuad = [&triangles](const QVector3D &a,
-                                     const QVector3D &b,
-                                     const QVector3D &c,
-                                     const QVector3D &d) {
-        triangles.push_back({a, b, c});
-        triangles.push_back({a, c, d});
-    };
-    for (std::size_t index = 1u; index < frames.size(); ++index) {
-        const QVector3D start = frames[index - 1u].position;
-        const QVector3D end = frames[index].position;
-        QVector3D direction = end - start;
-        if (direction.lengthSquared() < 0.000001f) {
-            continue;
-        }
-        direction.normalize();
-        const QVector3D reference =
-                std::fabs(QVector3D::dotProduct(
-                                  direction, QVector3D(0.0f, 1.0f, 0.0f))) <
-                        0.9f
-                ? QVector3D(0.0f, 1.0f, 0.0f)
-                : QVector3D(1.0f, 0.0f, 0.0f);
-        const QVector3D side =
-                QVector3D::crossProduct(direction, reference).normalized() *
-                radius;
-        const QVector3D normal =
-                QVector3D::crossProduct(side, direction).normalized() *
-                radius;
-        const std::array<QVector3D, 4u> startCorners{
-                start + side + normal,
-                start - side + normal,
-                start - side - normal,
-                start + side - normal};
-        const std::array<QVector3D, 4u> endCorners{
-                end + side + normal,
-                end - side + normal,
-                end - side - normal,
-                end + side - normal};
-        addQuad(startCorners[0],
-                startCorners[1],
-                startCorners[2],
-                startCorners[3]);
-        addQuad(endCorners[3],
-                endCorners[2],
-                endCorners[1],
-                endCorners[0]);
-        for (std::size_t sideIndex = 0u; sideIndex < 4u; ++sideIndex) {
-            const std::size_t next = (sideIndex + 1u) % 4u;
-            addQuad(startCorners[sideIndex],
-                    endCorners[sideIndex],
-                    endCorners[next],
-                    startCorners[next]);
-        }
-    }
-    if (triangles.empty()) {
-        const QVector3D center = frames.front().position;
-        const QVector3D x(radius, 0.0f, 0.0f);
-        const QVector3D y(0.0f, radius, 0.0f);
-        const QVector3D z(0.0f, 0.0f, radius);
-        const std::array<QVector3D, 8u> corners{
-                center - x - y - z,
-                center + x - y - z,
-                center + x + y - z,
-                center - x + y - z,
-                center - x - y + z,
-                center + x - y + z,
-                center + x + y + z,
-                center - x + y + z};
-        addQuad(corners[0], corners[1], corners[2], corners[3]);
-        addQuad(corners[7], corners[6], corners[5], corners[4]);
-        addQuad(corners[0], corners[4], corners[5], corners[1]);
-        addQuad(corners[1], corners[5], corners[6], corners[2]);
-        addQuad(corners[2], corners[6], corners[7], corners[3]);
-        addQuad(corners[3], corners[7], corners[4], corners[0]);
-    }
-    return BuildMeshBuffers(triangles, 2);
+    std::vector<QVector3D> positions;
+    positions.reserve(frames.size());
+    std::transform(frames.begin(), frames.end(),
+                   std::back_inserter(positions),
+                   [](const RaceViewerFrame &frame) {
+                       return frame.position;
+                   });
+    return BuildTrajectoryTubeMesh(positions, radius);
 }
 
 RaceViewerMeshBuffers BuildTrajectoryLineMesh(
@@ -1378,6 +1304,12 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                 static_cast<qint64>(batches.defaultTriangleCount);
         result.visualBoundsMin = batches.defaultBoundsMin;
         result.visualBoundsMax = batches.defaultBoundsMax;
+        result.cameraClipBounds.reserve(batches.batches.size());
+        for (const StaticVisualBatch &batch : batches.batches) {
+            if (!batch.defaultVisible) continue;
+            result.cameraClipBounds.push_back(
+                    {batch.boundsMin, batch.boundsMax});
+        }
 
         struct MaterialBindingKey {
             std::uint32_t sourceMaterialIndex = 0u;
@@ -1442,6 +1374,7 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
             item.insert(QStringLiteral("alphaMode"),
                         StaticVisualAlphaModeName(batch.alphaMode));
             item.insert(QStringLiteral("doubleSided"), batch.doubleSided);
+            item.insert(QStringLiteral("castsShadows"), batch.castsShadows);
             item.insert(QStringLiteral("spatiallyPartitioned"),
                         batch.spatiallyPartitioned);
             item.insert(QStringLiteral("cellX"), batch.cellX);
@@ -1552,6 +1485,8 @@ RaceViewerLoadResult LoadMapData(const QString &packsDirectory,
                                 MaterialClassName(batch.materialClass));
                     item.insert(QStringLiteral("defaultVisible"),
                                 batch.defaultVisible);
+                    item.insert(QStringLiteral("castsShadows"),
+                                batch.castsShadows);
                     const bool hasNativeMaterial =
                             batch.sourceMaterialIndex <
                             vehicleNativeMaterials.materials.size();
@@ -1788,6 +1723,8 @@ std::vector<RaceViewerFrame> ToViewerFrames(
                           frame.cameraSupportUpY,
                           frame.cameraSupportUpZ),
                 ToQt(frame.wheelGroundPosition),
+                ToQt(frame.wheelContactPoint),
+                ToQt(frame.wheelContactNormal),
                 frame.wheelSliding,
                 frame.wheelSurface});
     }
@@ -1840,6 +1777,8 @@ RaceViewerFrame ToViewerFrame(const PhysicsSandboxStateView &state) {
             state.car.wheelHasSurface,
             ToQt(state.car.cameraSupportUp),
             ToQt(state.car.wheelGroundPosition),
+            ToQt(state.car.wheelContactPoint),
+            ToQt(state.car.wheelContactNormal),
             state.car.wheelSliding,
             state.car.wheelSurface};
 }
@@ -1851,7 +1790,8 @@ SkidmarkSample ToSkidmarkSample(const RaceViewerFrame &frame) {
     sample.carRotation = frame.rotation;
     for (std::size_t wheel = 0u; wheel < sample.wheels.size(); ++wheel) {
         SkidmarkWheelSample &destination = sample.wheels[wheel];
-        destination.groundPosition = frame.wheelGroundPosition[wheel];
+        destination.contactPoint = frame.wheelContactPoint[wheel];
+        destination.contactNormal = frame.wheelContactNormal[wheel];
         destination.contact =
                 frame.wheelContact[wheel] && frame.wheelHasSurface[wheel];
         destination.sliding = frame.wheelSliding[wheel];
@@ -2083,7 +2023,7 @@ RaceViewerInputPreviewResult BuildInputPreview(
         runtime->simulationHorizonMs = simulationHorizonMs;
         result.mesh = BuildTrajectoryMesh(
                 result.frames, trajectoryRadius);
-        if (result.mesh.filled.isEmpty()) {
+        if (result.mesh.empty()) {
             result.error = QStringLiteral(
                     "The input preview produced no viewable path.");
             result.frames.clear();
@@ -2712,7 +2652,27 @@ qint64 RaceViewerController::sourceVisualObjectCount() const {
     return sourceVisualObjectCount_;
 }
 
-qint64 RaceViewerController::shadowCount() const { return 0; }
+qint64 RaceViewerController::shadowCount() const {
+    const auto countCasters = [](const QVariantList &batches) {
+        qint64 count = 0;
+        for (const QVariant &entry : batches) {
+            const QVariantMap batch = entry.toMap();
+            const QString alphaMode =
+                    batch.value(QStringLiteral("alphaMode")).toString();
+            if (batch.value(QStringLiteral("defaultVisible")).toBool() &&
+                batch.value(QStringLiteral("materialVisible")).toBool() &&
+                batch.value(QStringLiteral("castsShadows")).toBool() &&
+                alphaMode != QStringLiteral("blended") &&
+                alphaMode != QStringLiteral("additive") &&
+                alphaMode != QStringLiteral("subtractive")) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    return countCasters(visualBatches_) +
+            countCasters(vehicleVisualBatches_);
+}
 
 qint64 RaceViewerController::materialCount() const {
     return materialCount_;
@@ -2751,6 +2711,16 @@ RaceViewerController::cameraClipPlanes(const QVector3D &cameraPosition,
     const CameraClipPlanes planes = CalculateCameraClipPlanes(
             cameraPosition, static_cast<float>(cameraDistance), sceneBoundsMin_,
             sceneBoundsMax_);
+    return {planes.nearPlane, planes.farPlane};
+}
+
+QVector2D RaceViewerController::cameraClipPlanes(
+        const QVector3D &cameraPosition,
+        const QVector3D &cameraForward,
+        double cameraDistance) const {
+    const CameraClipPlanes planes = CalculateCameraClipPlanes(
+            cameraPosition, cameraForward,
+            static_cast<float>(cameraDistance), cameraClipBounds_);
     return {planes.nearPlane, planes.farPlane};
 }
 
@@ -3012,17 +2982,11 @@ void RaceViewerController::updateBestTrajectory(
     try {
         const float radius = static_cast<float>(
                 std::clamp(sceneRadius_ * 0.0004, 0.015, 0.15));
-        RaceViewerMeshBuffers mesh = BuildTrajectoryMesh(frames, radius);
-        if (mesh.filled.isEmpty()) {
+        TrajectoryMeshData mesh = BuildTrajectoryMesh(frames, radius);
+        if (mesh.empty()) {
             return;
         }
-        bestTrajectoryGeometry_.setMesh(
-                std::move(mesh.filled),
-                static_cast<int>(sizeof(FilledVertex)),
-                QQuick3DGeometry::PrimitiveType::Triangles,
-                true,
-                mesh.boundsMin,
-                mesh.boundsMax);
+        SetTrajectoryMesh(bestTrajectoryGeometry_, std::move(mesh));
 
         QVariantList paths = trajectoryPaths_;
         const auto existing = std::find_if(
@@ -4159,7 +4123,7 @@ void RaceViewerController::applyInputPreviewResult(
         emit stateChanged();
         return;
     }
-    if (result.frames.empty() || result.mesh.filled.isEmpty()) {
+    if (result.frames.empty() || result.mesh.empty()) {
         clearInputPreview();
         emit stateChanged();
         return;
@@ -4199,13 +4163,7 @@ void RaceViewerController::applyInputPreviewResult(
     } else {
         *existingPath = path;
     }
-    inputPreviewGeometry_.setMesh(
-            std::move(result.mesh.filled),
-            static_cast<int>(sizeof(FilledVertex)),
-            QQuick3DGeometry::PrimitiveType::Triangles,
-            true,
-            result.mesh.boundsMin,
-            result.mesh.boundsMax);
+    SetTrajectoryMesh(inputPreviewGeometry_, std::move(result.mesh));
     trajectoryPaths_ = std::move(paths);
     inputPreviewVisible_ = true;
     emit trajectoriesChanged();
@@ -4652,6 +4610,10 @@ void RaceViewerController::applyLoadResult(
     diagnosticCount_ = result.diagnosticCount;
     sceneBoundsMin_ = result.visualBoundsMin;
     sceneBoundsMax_ = result.visualBoundsMax;
+    cameraClipBounds_ = std::move(result.cameraClipBounds);
+    if (cameraClipBounds_.empty()) {
+        cameraClipBounds_.push_back({sceneBoundsMin_, sceneBoundsMax_});
+    }
     sceneRadius_ = std::max(
             1.0, 0.5 * static_cast<double>(
                     (result.visualBoundsMax -
@@ -5029,6 +4991,10 @@ void RaceViewerController::appendSimulationDebuggerFrame(
             frame.value(QStringLiteral("linearSpeed")).toList();
     const QVariantList wheelGroundPositions =
             frame.value(QStringLiteral("wheelGroundPosition")).toList();
+    const QVariantList wheelContactPoints =
+            frame.value(QStringLiteral("wheelContactPoint")).toList();
+    const QVariantList wheelContactNormals =
+            frame.value(QStringLiteral("wheelContactNormal")).toList();
     const QVariantList wheelContact =
             frame.value(QStringLiteral("wheelContact")).toList();
     const QVariantList wheelHasSurface =
@@ -5053,6 +5019,16 @@ void RaceViewerController::appendSimulationDebuggerFrame(
             QQuaternion(rotation[3].toFloat(), rotation[0].toFloat(),
                         rotation[1].toFloat(), rotation[2].toFloat())
                     .normalized();
+    QVector3D fallbackContactNormal = viewerFrame.rotation.rotatedVector(
+            QVector3D(0.0f, 1.0f, 0.0f));
+    if (!std::isfinite(fallbackContactNormal.x()) ||
+        !std::isfinite(fallbackContactNormal.y()) ||
+        !std::isfinite(fallbackContactNormal.z()) ||
+        fallbackContactNormal.lengthSquared() < 0.000001f) {
+        fallbackContactNormal = {0.0f, 1.0f, 0.0f};
+    } else {
+        fallbackContactNormal.normalize();
+    }
     viewerFrame.accelerate =
             frame.value(QStringLiteral("accelerate")).toFloat();
     viewerFrame.brake = frame.value(QStringLiteral("brake")).toFloat();
@@ -5089,6 +5065,27 @@ void RaceViewerController::appendSimulationDebuggerFrame(
                 viewerFrame.wheelGroundPosition[wheel] =
                         QVector3D(ground[0].toFloat(), ground[1].toFloat(),
                                   ground[2].toFloat());
+            }
+        }
+        viewerFrame.wheelContactPoint[wheel] =
+                viewerFrame.wheelGroundPosition[wheel];
+        viewerFrame.wheelContactNormal[wheel] = fallbackContactNormal;
+        if (wheel < static_cast<std::size_t>(wheelContactPoints.size())) {
+            const QVariantList point =
+                    wheelContactPoints[static_cast<qsizetype>(wheel)].toList();
+            if (point.size() == 3) {
+                viewerFrame.wheelContactPoint[wheel] =
+                        QVector3D(point[0].toFloat(), point[1].toFloat(),
+                                  point[2].toFloat());
+            }
+        }
+        if (wheel < static_cast<std::size_t>(wheelContactNormals.size())) {
+            const QVariantList normal =
+                    wheelContactNormals[static_cast<qsizetype>(wheel)].toList();
+            if (normal.size() == 3) {
+                viewerFrame.wheelContactNormal[wheel] =
+                        QVector3D(normal[0].toFloat(), normal[1].toFloat(),
+                                  normal[2].toFloat());
             }
         }
         if (wheel < static_cast<std::size_t>(wheelContact.size())) {

@@ -313,10 +313,14 @@ bool VisualBaseTextureFiltersMatchSharpMode(
                         QStringLiteral("opaque") &&
                 materialClass != QStringLiteral("Grass") &&
                 materialClass != QStringLiteral("Dirt") &&
-                materialClass != QStringLiteral("Asphalt");
+                materialClass != QStringLiteral("Asphalt") &&
+                materialClass != QStringLiteral("Turbo") &&
+                materialClass != QStringLiteral("Signage") &&
+                materialClass != QStringLiteral("Checkpoint") &&
+                materialClass != QStringLiteral("Start / finish") &&
+                materialClass != QStringLiteral("Emissive");
         if (RuntimeEnumPropertyKey(texture, "minFilter") !=
-                    (preserveBaseMip ? QByteArrayLiteral("Nearest")
-                                     : QByteArrayLiteral("Linear")) ||
+                    QByteArrayLiteral("Linear") ||
             RuntimeEnumPropertyKey(texture, "mipFilter") !=
                     (preserveBaseMip ? QByteArrayLiteral("None")
                                      : QByteArrayLiteral("Linear"))) {
@@ -5946,6 +5950,8 @@ int main(int argc, char **argv) {
                                         mainMapLight != nullptr &&
                                         mainMapLight->property("castsShadow")
                                                 .toBool() &&
+                                        mainMapLight->property("shadowMapFar")
+                                                        .toDouble() > 1000.0 &&
                                         std::any_of(
                                                 visualModels.cbegin(),
                                                 visualModels.cend(),
@@ -5972,8 +5978,8 @@ int main(int argc, char **argv) {
                                                 .toBool() &&
                                         fillMapLight->property("visible")
                                                 .toBool() &&
-                                        !mainMapLight->property("castsShadow")
-                                                 .toBool();
+                                        mainMapLight->property("castsShadow")
+                                                .toBool();
                                 const bool rasterOnlyModeValid =
                                         gpuRayTracingView == nullptr &&
                                         rasterMapView != nullptr &&
@@ -6002,8 +6008,8 @@ int main(int argc, char **argv) {
                                                                 .toDouble() <=
                                                 50001.0 &&
                                         mainMapLight != nullptr &&
-                                        !mainMapLight->property("castsShadow")
-                                                 .toBool() &&
+                                        mainMapLight->property("castsShadow")
+                                                .toBool() &&
                                         std::all_of(
                                                 visualModels.cbegin(),
                                                 visualModels.cend(),
@@ -6056,9 +6062,9 @@ int main(int argc, char **argv) {
                                                 .toBool() &&
                                         fillMapLight->property("visible")
                                                 .toBool() &&
-                                        !mainMapLight
-                                                 ->property("castsShadow")
-                                                 .toBool() &&
+                                        mainMapLight
+                                                ->property("castsShadow")
+                                                .toBool() &&
                                         !fillMapLight
                                                  ->property("castsShadow")
                                                  .toBool();

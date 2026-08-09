@@ -85,16 +85,16 @@ forevertas::viewer::SkidmarkMeshData MakeSmokeMesh() {
 
     SkidmarkSample first;
     first.timeMs = 0;
-    first.wheels[0].groundPosition = {0.0f, 0.0f, -0.10f};
+    first.wheels[0].contactPoint = {0.0f, 0.0f, -0.10f};
     first.wheels[0].contact = true;
     first.wheels[0].sliding = true;
     first.wheels[0].surface = 0;
-    first.wheels[1].groundPosition = {0.9f, 0.0f, -0.10f};
+    first.wheels[1].contactPoint = {0.9f, 0.0f, -0.10f};
 
     SkidmarkSample second = first;
     second.timeMs = 50;
-    second.wheels[0].groundPosition.setZ(0.10f);
-    second.wheels[1].groundPosition.setZ(0.10f);
+    second.wheels[0].contactPoint.setZ(0.10f);
+    second.wheels[1].contactPoint.setZ(0.10f);
 
     return forevertas::viewer::BuildSkidmarkMesh({first, second});
 }
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
                         "POSITION = MODELVIEWPROJECTION_MATRIX * "
                         "vec4(VERTEX, 1.0);") &&
                 vertexSource.contains(
-                        "POSITION.z -= 0.000005 * POSITION.w;") &&
+                        "POSITION.z -= 0.00002 * POSITION.w;") &&
                 !vertexSource.contains("VERTEX.y") &&
                 !vertexSource.contains("MODEL_MATRIX") &&
                 fragmentSource.contains("trajectoryColor.rgb") &&
@@ -195,6 +195,40 @@ int main(int argc, char **argv) {
         if (!sourceContract) {
             qInstallMessageHandler(previousMessageHandler);
             std::cerr << "trajectory shader/material source contract failed\n";
+            return 1;
+        }
+    } else {
+        const QByteArray materialSource = readContent(QStringLiteral(
+                FOREVERTAS_SOURCE_DIR "/qml/SkidmarkMaterial.qml"));
+        const QByteArray mainSource = readContent(QStringLiteral(
+                FOREVERTAS_SOURCE_DIR "/qml/Main.qml"));
+        const bool sourceContract =
+                vertexSource.contains(
+                        "POSITION = MODELVIEWPROJECTION_MATRIX * "
+                        "vec4(VERTEX, 1.0);") &&
+                vertexSource.contains(
+                        "POSITION.z -= 0.00002 * POSITION.w;") &&
+                fragmentSource.contains(
+                        "float edgeWidth = clamp(lateralDerivative") &&
+                fragmentSource.contains(
+                        "float minificationBoost = mix(") &&
+                fragmentSource.contains(
+                        "smoothstep(0.35, 1.5, lateralDerivative)") &&
+                materialSource.contains(
+                        "shadingMode: CustomMaterial.Unshaded") &&
+                materialSource.contains(
+                        "sourceBlend: CustomMaterial.SrcAlpha") &&
+                materialSource.contains(
+                        "destinationBlend: "
+                        "CustomMaterial.OneMinusSrcAlpha") &&
+                materialSource.contains(
+                        "depthDrawMode: Material.NeverDepthDraw") &&
+                materialSource.contains("cullMode: Material.NoCulling") &&
+                mainSource.contains("objectName: \"skidmarkModel\"") &&
+                mainSource.contains("depthBias: -5");
+        if (!sourceContract) {
+            qInstallMessageHandler(previousMessageHandler);
+            std::cerr << "skidmark shader/material source contract failed\n";
             return 1;
         }
     }

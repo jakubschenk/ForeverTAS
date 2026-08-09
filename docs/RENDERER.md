@@ -72,21 +72,25 @@ wrapping, UV selection, filtering, mip, alpha, and culling state. Static
 geometry is rebuilt only after a successful
 replay reload; playback updates car transforms without touching map resources.
 
-Native + static sun is the default. It keeps the authored diffuse composition,
-disables dynamic world shadows and normal/specular relighting, but uses low
-energy sky, sun, and fill contributions with linear-to-sRGB tonemapping. This
-avoids the near-black result caused by sending linear material output directly
-to the display. The shared `DefaultPreLightGen.Texture.Gbx` input is a runtime
-shader resource, not a per-material image that can be extracted as a baked
-lightmap. Likewise, `PreLightGen` sampler names on block and surrounding
+Native + static sun is the default. It keeps the authored diffuse composition
+and disables dynamic world relighting, while low-energy sky, sun, and fill
+contributions plus linear-to-sRGB tonemapping avoid crushing the image to near
+black. A localized selected-car contact shadow is enabled independently by
+default in authored mode; static map geometry receives it but does not enter a
+second global shadow-caster pass. The shared
+`DefaultPreLightGen.Texture.Gbx` input is a runtime shader resource, not a
+per-material image that can be extracted as a
+baked lightmap. Likewise, `PreLightGen` sampler names on block and surrounding
 Stadium grass do not make those materials emissive; authored grass identity
 and collision semantics take precedence. A compatibility setting enables
-stronger dynamic fragment lighting,
-normal/specular maps, ACES tonemapping, and optional world shadows. MSAA and
-texture filtering are persistent graphics settings; bilinear mode still uses
-the authored/generated mip chain and trilinear mode blends between mip levels.
-The replay-car proxy uses a clear-coated car treatment that remains compatible
-with the terrain material contract.
+stronger dynamic fragment lighting, normal/specular maps, ACES tonemapping,
+and optional full-world shadows. MSAA (off, 2x, 4x, or 8x), contact shadows,
+world shadows, and texture filtering are persistent graphics settings. Even
+the sharp profile retains linear minification, and authored graphic materials
+such as turbo arrows, signs, checkpoints, and start/finish textures retain
+trilinear mip filtering instead of unstable nearest sampling. The replay-car
+proxy uses a clear-coated car treatment that remains compatible with the
+terrain material contract.
 
 ForeverValidator labels enclosing backdrop geometry with a generic
 `PhysicsSandboxRenderLayer::Background` value. Classification is based on
@@ -101,10 +105,19 @@ hidden.
 The overlap audit checks for exact duplicates, cross-purpose coincident
 transforms, and coincident conflicting materials.
 
-Camera near/far planes are recalculated from camera position, orbit distance,
-and the default visible-scene bounds. There is no fixed 5000-unit minimum. The
-near plane also tracks the far plane to maintain a useful depth ratio.
-Background-layer bounds do not inflate the camera range.
+Camera near/far planes are recalculated from camera position, view direction,
+orbit distance, and the projected bounds of default-visible spatial batches.
+Geometry fully behind the camera cannot inflate the range, normal orbit views
+retain a distance-derived near plane, and the far/near ratio is kept bounded.
+There is no fixed 5000-unit minimum, and background-layer bounds do not inflate
+the camera range.
+
+Trajectory tubes use shared indexed rings and a parallel-transport frame, so
+camera-angle changes do not expose coplanar segment caps or abrupt frame flips.
+Only the two path endpoints are capped. Skidmark ribbons consume per-wheel
+contact data from the simulation and are offset along the contact normal rather
+than a fixed world-up direction, which keeps them visible on banked and vertical
+surfaces.
 
 The viewer provides Textured, Neutral, Collision, Wireframe, and High Contrast
 modes. Collision and Wireframe continue to use the legacy collision buffers.

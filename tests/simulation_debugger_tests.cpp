@@ -415,10 +415,24 @@ int main(int argc, char **argv) {
                     const QVariantList wheelGroundPositions =
                             frame.value(QStringLiteral("wheelGroundPosition"))
                                     .toList();
+                    const QVariantList wheelContactPoints =
+                            frame.value(QStringLiteral("wheelContactPoint"))
+                                    .toList();
+                    const QVariantList wheelContactNormals =
+                            frame.value(QStringLiteral("wheelContactNormal"))
+                                    .toList();
                     okay &= Check(
                             frame.contains(QStringLiteral("respawnCount")) &&
                                     wheelGroundPositions.size() == 4 &&
                                     wheelGroundPositions.front()
+                                                     .toList()
+                                                     .size() == 3 &&
+                                    wheelContactPoints.size() == 4 &&
+                                    wheelContactPoints.front()
+                                                    .toList()
+                                                    .size() == 3 &&
+                                    wheelContactNormals.size() == 4 &&
+                                    wheelContactNormals.front()
                                                     .toList()
                                                     .size() == 3 &&
                                     frame.value(QStringLiteral("wheelContact"))

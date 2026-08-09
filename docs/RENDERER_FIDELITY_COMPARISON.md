@@ -16,12 +16,11 @@ sky/environment lighting, and a car that belongs in the scene. ForeverTAS does
 not copy AGPL implementation code or assets; the implementation here is an
 independent MIT-licensed renderer change using documented CC0 assets.
 
-The reference viewer still has a fundamental asset advantage: it can display
-game-derived texture data and richer vehicle/scene assets. ForeverTAS currently
-receives geometry plus material identity/path metadata from ForeverValidator,
-not authored texture pixels, and still represents the car with simulation
-ellipsoids. This iteration targets lighting and material fidelity within that
-data contract.
+The reference viewer still has a fundamental asset advantage in vehicle and
+scene completeness. ForeverTAS now resolves supported native material maps and
+preserves their authored UV channels and mip behavior, while unsupported game
+resources still use explicit fallbacks. The simulation ellipsoids remain the
+last-resort vehicle representation when no visual car mesh is available.
 
 ## Controlled fixture
 
@@ -83,12 +82,15 @@ sampled colors reflect materially greater local contrast and surface detail.
 
 Visible improvements in the matched frames include:
 
-- directional shadows from track structures and the replay-car proxy;
-- screen-space ambient occlusion and stronger contact/depth cues;
-- higher quality MSAA and a depth pre-pass;
-- normal and roughness detail on asphalt, dirt, metal, painted metal, and
-  rubber;
-- material-specific specular, clearcoat, transmission, and refraction values;
+- native base/normal/specular maps and verified `GrassOcc` occlusion data with
+  their authored UV selection;
+- a localized selected-car contact shadow in authored-lighting mode, without a
+  second global shadow pass darkening the baked map;
+- an optional dynamically lit mode with bounded full-world shadow maps;
+- persistent 2x, 4x, and 8x MSAA profiles plus stable linear/trilinear
+  minification for distant graphic textures;
+- material-specific roughness and clearcoat behavior, with dynamic normal and
+  specular relighting limited to the opt-in lit mode;
 - a lit, clear-coated replay-car proxy instead of a flat emissive overlay; and
 - stronger separation between grass, road, metal, water, and structural parts.
 

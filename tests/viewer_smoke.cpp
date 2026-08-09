@@ -1885,7 +1885,7 @@ int main(int argc, char **argv) {
                                     viewer.visualBatches().size() &&
                             viewer.visualBatchCount() <
                                     viewer.sourceVisualObjectCount() &&
-                            viewer.shadowCount() == 0 &&
+                            viewer.shadowCount() > 0 &&
                             viewer.diagnosticCount() > 0 &&
                             visibleMaterialClasses.size() >= 3 &&
                             viewer.ellipsoidCount() > 0 &&

@@ -21,6 +21,9 @@ class GraphicsSettings final : public QObject {
                        setTextureFiltering NOTIFY textureFilteringChanged)
     Q_PROPERTY(bool worldShadows READ worldShadows WRITE setWorldShadows NOTIFY
                        worldShadowsChanged)
+    Q_PROPERTY(bool vehicleContactShadows READ vehicleContactShadows WRITE
+                       setVehicleContactShadows NOTIFY
+                               vehicleContactShadowsChanged)
     Q_PROPERTY(bool skidmarksEnabled READ skidmarksEnabled WRITE
                        setSkidmarksEnabled NOTIFY skidmarksEnabledChanged)
 
@@ -33,6 +36,7 @@ public:
     int msaaSamples() const;
     QString textureFiltering() const;
     bool worldShadows() const;
+    bool vehicleContactShadows() const;
     bool skidmarksEnabled() const;
 
     void setRenderMode(const QString &value);
@@ -40,6 +44,7 @@ public:
     void setMsaaSamples(int value);
     void setTextureFiltering(const QString &value);
     void setWorldShadows(bool value);
+    void setVehicleContactShadows(bool value);
     void setSkidmarksEnabled(bool value);
 
 signals:
@@ -48,6 +53,7 @@ signals:
     void msaaSamplesChanged();
     void textureFilteringChanged();
     void worldShadowsChanged();
+    void vehicleContactShadowsChanged();
     void skidmarksEnabledChanged();
 
 private:
@@ -58,6 +64,8 @@ private:
                                               bool *repaired);
     static bool WorldShadowsFromValue(const QVariant &value,
                                       bool *repaired);
+    static bool VehicleContactShadowsFromValue(const QVariant &value,
+                                               bool *repaired);
     static bool SkidmarksEnabledFromValue(const QVariant &value,
                                           bool *repaired);
     void Load();
@@ -72,6 +80,7 @@ private:
     int msaaSamples_ = 2;
     QString textureFiltering_ = QStringLiteral("trilinear");
     bool worldShadows_ = false;
+    bool vehicleContactShadows_ = true;
     bool skidmarksEnabled_ = true;
 };
 
